@@ -24,9 +24,10 @@ class CgmService : Service() {
         const val CHANNEL_ID = "CgmServiceChannel"
         const val ACTION_CGM_UPDATE = "com.myuni.cgmapp.CGM_UPDATE"
         const val EXTRA_CGM_VALUE = "EXTRA_CGM_VALUE"
+        const val EXTRA_CGM_AGE = "EXTRA_CGM_AGE"
         // Scan for 1.25 seconds as requested
-        private const val SCAN_DURATION: Long = 1000
-        private const val SCAN_INTERVAL: Long = 1 * 60 * 1000 // 3 minutes
+        private const val SCAN_DURATION: Long = 5250
+        private const val SCAN_INTERVAL: Long = 60* 1000 // 3 minutes
     }
 
     private lateinit var centralManager: BluetoothCentralManager
@@ -38,14 +39,83 @@ class CgmService : Service() {
 
     private val centralManagerCallback = object : BluetoothCentralManagerCallback() {
         override fun onDiscovered(peripheral: BluetoothPeripheral, scanResult: ScanResult) {
-            // Parse manufacturer data from the native ScanResult
+            Log.d("CgmService", "Discovered: ${peripheral.name} (${peripheral.address})")
+            
             val record = scanResult.scanRecord
             if (record != null) {
-                val manufacturerData = record.manufacturerSpecificData
-                if (manufacturerData != null && manufacturerData.size() > 0) {
-                     processManufacturerData(manufacturerData)
+                // Log Raw Bytes
+                val rawBytes = record.bytes
+                if (rawBytes != null) {
+                    val rawHex = rawBytes.joinToString(" ") { String.format("%02X", it) }
+                    Log.d("CgmService", "Raw Scan Record: $rawHex")
+
+                    // Manually parse raw bytes to find all manufacturer data blocks
+                    // Android's ScanRecord.getManufacturerSpecificData() (SparseArray) 
+                    // overwrites if multiple blocks have the same Company ID.
+                    val allMfgData = extractManufacturerData(rawBytes)
+                    for (data in allMfgData) {
+                        if (data.size >= 2) {
+                            val id = (data[0].toInt() and 0xFF) or ((data[1].toInt() and 0xFF) shl 8)
+                            if (id == 0x0059) {
+                                processNordicData(data)
+                            }
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    /**
+     * Extracts all Manufacturer Specific Data blocks (Type 0xFF) from raw scan record.
+     * Each returned ByteArray starts with the 2-byte Company Identifier.
+     */
+    private fun extractManufacturerData(rawBytes: ByteArray): List<ByteArray> {
+        val blocks = mutableListOf<ByteArray>()
+        var i = 0
+        while (i < rawBytes.size - 2) {
+            val len = rawBytes[i].toInt() and 0xFF
+            if (len == 0) break
+            if (i + len >= rawBytes.size) break
+            
+            val type = rawBytes[i + 1].toInt() and 0xFF
+            if (type == 0xFF && len >= 3) {
+                // It's manufacturer data. 
+                // Copy from index i+2 (Company ID) for (len-1) bytes
+                val data = rawBytes.copyOfRange(i + 2, i + len + 1)
+                blocks.add(data)
+            }
+            i += len + 1
+        }
+        return blocks
+    }
+
+    private fun processNordicData(data: ByteArray) {
+        val hexString = data.joinToString(separator = " ") { String.format("%02X", it) }
+        Log.d("CgmService", "Processing Nordic Mfg Data: $hexString")
+
+        // Based on aidex.cpp:
+        // POSITIONAL_CORRECTION = 2
+        // glucose = data[POSITIONAL_CORRECTION + 10] => index 12
+        // age = data[POSITIONAL_CORRECTION + 1] => index 3
+        // phase = data[POSITIONAL_CORRECTION + 9] => index 11
+        
+        if (data.size >= 13) {
+            val glucoseByte = data[12]
+            val glucoseVal = (glucoseByte.toInt() and 0xFF) / 10.0
+            
+            val phase = data[11].toInt() and 0xFF
+            val age = (data[3].toInt() and 0xFF) / 6
+            
+            Log.d("CgmService", "Glucose Found: $glucoseVal, Phase: $phase, Age: $age (mins)")
+
+            // Broadcast the value
+            val intent = Intent(ACTION_CGM_UPDATE)
+            intent.putExtra(EXTRA_CGM_VALUE, glucoseVal)
+            intent.setPackage(packageName)
+            sendBroadcast(intent)
+        } else {
+            Log.d("CgmService", "Nordic block too short for glucose data (${data.size} bytes)")
         }
     }
 
@@ -126,7 +196,6 @@ class CgmService : Service() {
         try {
             // Scan for peripherals with our specific Service UUID
             centralManager.scanForPeripheralsWithServices(listOf(SERVICE_UUID))
-            //centralManager.scanForPeripheralsWithAddresses(listOf("EE:1E:D0:FA:05:39"))
             isScanning = true
 
             // Stop scanning after SCAN_DURATION
@@ -147,36 +216,10 @@ class CgmService : Service() {
         isScanning = false
     }
 
-    private fun processManufacturerData(manufacturerData: android.util.SparseArray<ByteArray>) {
-        for (i in 0 until manufacturerData.size()) {
-            val bytes = manufacturerData.valueAt(i)
-            
-            // Logic from aidex.cpp:
-            // C++ strManufacturerData[POSITIONAL_CORRECTION+10] where POSITIONAL_CORRECTION = 2
-            // This is index 12 in the raw manufacturer data (including 2-byte Company ID).
-            // In Android, 'bytes' excludes the Company ID, so we use index 10.
-            
-            if (bytes.size > 10) {
-                val glucoseByte = bytes[10]
-                // Convert to unsigned int and divide by 10.0
-                val glucoseVal = (glucoseByte.toInt() and 0xFF) / 10.0
-
-                Log.d("CgmService", "Glucose Found: $glucoseVal")
-
-                // Broadcast the value
-                val intent = Intent(ACTION_CGM_UPDATE)
-                intent.putExtra(EXTRA_CGM_VALUE, glucoseVal)
-                intent.setPackage(packageName)
-                sendBroadcast(intent)
-            }
-        }
-    }
-
     override fun onDestroy() {
         super.onDestroy()
         stopScan()
         handler.removeCallbacks(scanRunnable)
-        // centralManager.close() // Blessed 3.0 might not have close() or it might be implicit
     }
 
     override fun onBind(intent: Intent?): IBinder? {
