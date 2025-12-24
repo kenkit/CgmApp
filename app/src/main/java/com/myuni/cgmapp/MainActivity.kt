@@ -10,6 +10,8 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.appwidget.AppWidgetManager
+import android.content.ComponentName
 import android.graphics.Color
 import android.widget.TextView
 import android.widget.Toast
@@ -86,6 +88,15 @@ class MainActivity : AppCompatActivity() {
         sampleAgeTextView = findViewById(R.id.sample_age)
 
         loadLastValueFromDb()
+        
+        // Start service if widget is present
+        val appWidgetManager = AppWidgetManager.getInstance(this)
+        val ids = appWidgetManager.getAppWidgetIds(ComponentName(this, CgmWidget::class.java))
+        if (ids.isNotEmpty()) {
+            android.util.Log.d("MainActivity", "Widget present, ensuring service is started")
+            startCgmService()
+        }
+
         checkPermissionsAndStartService()
     }
 

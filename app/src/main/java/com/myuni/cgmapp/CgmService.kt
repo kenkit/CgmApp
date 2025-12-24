@@ -42,6 +42,7 @@ class CgmService : Service() {
     // Service UUID
     private val SERVICE_UUID = UUID.fromString("0000f000-0000-1000-8000-00805f9b34fb")
     private lateinit var dbHelper: DatabaseHelper
+    private lateinit var notificationService: PersistentNotificationService
 
     private val centralManagerCallback = object : BluetoothCentralManagerCallback() {
         override fun onDiscovered(peripheral: BluetoothPeripheral, scanResult: ScanResult) {
@@ -143,6 +144,12 @@ class CgmService : Service() {
             }
             db.insertWithOnConflict(GlucoseContract.GlucoseEntry.TABLE_NAME, null, values, SQLiteDatabase.CONFLICT_IGNORE)
 
+            // Update Notification
+            notificationService.updateNotification(glucoseVal, arrow, ageInMinutes)
+            
+            // Update Widget
+            CgmWidget.updateWidget(this, glucoseVal, arrow, ageInMinutes)
+
             // Broadcast the value
             val intent = Intent(ACTION_CGM_UPDATE)
             intent.putExtra(EXTRA_CGM_VALUE, glucoseVal)
@@ -164,7 +171,7 @@ class CgmService : Service() {
     override fun onCreate() {
         super.onCreate()
         Log.d("CgmService", "CgmService onCreate")
-        createNotificationChannel()
+        notificationService = PersistentNotificationService(this)
         dbHelper = DatabaseHelper(this)
         last_cgm_value = loadLastCgmValue()
 
@@ -205,41 +212,13 @@ class CgmService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d("CgmService", "CgmService onStartCommand")
-        val notification = createNotification()
-        startForeground(1, notification)
+        
+        val notification = notificationService.getInitialNotification(dbHelper)
+        startForeground(PersistentNotificationService.NOTIFICATION_ID, notification)
 
         startPeriodicScan()
 
         return START_STICKY
-    }
-
-    private fun createNotification(): Notification {
-        val notificationIntent = Intent(this, MainActivity::class.java)
-        val pendingIntent = PendingIntent.getActivity(
-            this,
-            0,
-            notificationIntent,
-            PendingIntent.FLAG_IMMUTABLE
-        )
-
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("CGM Service")
-            .setContentText("Scanning for CGM values...")
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentIntent(pendingIntent)
-            .build()
-    }
-
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val serviceChannel = NotificationChannel(
-                CHANNEL_ID,
-                "CGM Service Channel",
-                NotificationManager.IMPORTANCE_DEFAULT
-            )
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(serviceChannel)
-        }
     }
 
     private val scanRunnable = object : Runnable {
