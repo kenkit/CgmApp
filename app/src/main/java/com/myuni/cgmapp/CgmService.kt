@@ -154,6 +154,7 @@ class CgmService : Service() {
         while (cursor.moveToNext()) {
             val timestamp = cursor.getLong(cursor.getColumnIndexOrThrow(GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP))
             val valueMmol = cursor.getDouble(cursor.getColumnIndexOrThrow(GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE))
+            val rssi = cursor.getInt(cursor.getColumnIndexOrThrow(GlucoseContract.GlucoseEntry.COLUMN_NAME_RSSI))
             
             val valueMgdl = (valueMmol * 18.0182).toInt()
             val dateString = isoFormatter.format(Instant.ofEpochMilli(timestamp))
@@ -162,7 +163,8 @@ class CgmService : Service() {
                 sgv = valueMgdl, 
                 date = timestamp, 
                 dateString = dateString,
-                direction = "None"
+                direction = "None",
+                rssi = rssi
             ))
             timestampsToMark.add(timestamp)
         }
@@ -250,7 +252,7 @@ class CgmService : Service() {
                         if (data.size >= 2) {
                             val id = (data[0].toInt() and 0xFF) or ((data[1].toInt() and 0xFF) shl 8)
                             if (id == 0x0059) {
-                                processNordicData(data)
+                                processNordicData(data, scanResult.rssi)
                             }
                         }
                     }
@@ -283,7 +285,7 @@ class CgmService : Service() {
         return blocks
     }
 
-    private fun processNordicData(data: ByteArray) {
+    private fun processNordicData(data: ByteArray, rssi: Int) {
         val hexString = data.joinToString(separator = " ") { String.format("%02X", it) }
         Log.d("CgmService", "Processing Nordic Mfg Data: $hexString")
 
@@ -316,7 +318,7 @@ class CgmService : Service() {
             }
             last_cgm_value = glucoseVal
 
-            Log.d("CgmService", "Glucose Found: $glucoseVal, diff: $diff, arrow: $arrow,  Phase: $phase, Age: $ageInMinutes (mins)")
+            Log.d("CgmService", "Glucose Found: $glucoseVal, diff: $diff, arrow: $arrow,  Phase: $phase, Age: $ageInMinutes (mins), RSSI: $rssi")
 
             // Calculate timestamp based on age
             val currentTime = Calendar.getInstance().timeInMillis
@@ -327,6 +329,7 @@ class CgmService : Service() {
             val values = ContentValues().apply {
                 put(GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP, timestamp)
                 put(GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE, glucoseVal)
+                put(GlucoseContract.GlucoseEntry.COLUMN_NAME_RSSI, rssi)
             }
             db.insertWithOnConflict(GlucoseContract.GlucoseEntry.TABLE_NAME, null, values, SQLiteDatabase.CONFLICT_IGNORE)
 

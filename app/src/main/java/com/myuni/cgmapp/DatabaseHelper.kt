@@ -11,6 +11,7 @@ object GlucoseContract {
         const val COLUMN_NAME_TIMESTAMP = "timestamp"
         const val COLUMN_NAME_VALUE = "value"
         const val COLUMN_NAME_UPLOADED = "uploaded"
+        const val COLUMN_NAME_RSSI = "rssi"
     }
 }
 
@@ -20,7 +21,8 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
         val sql_create_entries = "CREATE TABLE ${GlucoseContract.GlucoseEntry.TABLE_NAME} (" +
                 "${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} INTEGER PRIMARY KEY," +
                 "${GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE} FLOAT," +
-                "${GlucoseContract.GlucoseEntry.COLUMN_NAME_UPLOADED} INTEGER DEFAULT 0)"
+                "${GlucoseContract.GlucoseEntry.COLUMN_NAME_UPLOADED} INTEGER DEFAULT 0," +
+                "${GlucoseContract.GlucoseEntry.COLUMN_NAME_RSSI} INTEGER)"
         db.execSQL(sql_create_entries)
     }
 
@@ -31,7 +33,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
     }
 
     companion object {
-        const val DATABASE_VERSION = 4
+        const val DATABASE_VERSION = 5
         const val DATABASE_NAME = "CgmApp.db"
     }
 }
