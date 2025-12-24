@@ -55,6 +55,7 @@ class CgmService : Service() {
     private val client = OkHttpClient()
     private val gson = Gson()
     private val isoFormatter = DateTimeFormatter.ISO_INSTANT.withZone(ZoneId.of("UTC"))
+    private var jwtToken: String? = null
 
     data class NightscoutEntry(
         val type: String = "sgv",
@@ -66,6 +67,10 @@ class CgmService : Service() {
         val filtered: Int = 0,
         val unfiltered: Int = 0,
         val rssi: Int = 100
+    )
+
+    data class AuthResponse(
+        val token: String
     )
 
     private fun mapArrowToDirection(arrow: String): String {
@@ -88,6 +93,51 @@ class CgmService : Service() {
 
         if (url.isEmpty() || apiSecret.isEmpty()) return
 
+        // If we don't have a token yet, fetch it first
+        if (jwtToken == null) {
+            fetchJwtAndUpload(url, apiSecret)
+            return
+        }
+
+        performUpload(url)
+    }
+
+    private fun fetchJwtAndUpload(url: String, apiSecret: String) {
+        val authUrl = "${url.trimEnd('/')}/api/v2/authorization/request/$apiSecret"
+        val request = Request.Builder()
+            .url(authUrl)
+            .get()
+            .addHeader("Accept", "application/json")
+            .build()
+
+        client.newCall(request).enqueue(object : okhttp3.Callback {
+            override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
+                Log.e("CgmService", "Nightscout authorization failed", e)
+            }
+
+            override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+                val body = response.body?.string()
+                if (response.isSuccessful && body != null) {
+                    try {
+                        val authResponse = gson.fromJson(body, AuthResponse::class.java)
+                        jwtToken = authResponse.token
+                        Log.d("CgmService", "Nightscout authorization successful")
+                        // Now perform the actual upload
+                        performUpload(url)
+                    } catch (e: Exception) {
+                        Log.e("CgmService", "Error parsing auth response", e)
+                    }
+                } else {
+                    Log.e("CgmService", "Auth request failed: ${response.code}")
+                }
+                response.close()
+            }
+        })
+    }
+
+    private fun performUpload(url: String) {
+        val token = jwtToken ?: return
+        
         val db = dbHelper.readableDatabase
         val cursor = db.query(
             GlucoseContract.GlucoseEntry.TABLE_NAME,
@@ -105,16 +155,14 @@ class CgmService : Service() {
             val timestamp = cursor.getLong(cursor.getColumnIndexOrThrow(GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP))
             val valueMmol = cursor.getDouble(cursor.getColumnIndexOrThrow(GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE))
             
-            // Nightscout SGV is typically mg/dL
             val valueMgdl = (valueMmol * 18.0182).toInt()
-            
             val dateString = isoFormatter.format(Instant.ofEpochMilli(timestamp))
             
             entries.add(NightscoutEntry(
                 sgv = valueMgdl, 
                 date = timestamp, 
                 dateString = dateString,
-                direction = "None" // We don't store direction per reading yet, using None
+                direction = "None"
             ))
             timestampsToMark.add(timestamp)
         }
@@ -128,7 +176,7 @@ class CgmService : Service() {
         val request = Request.Builder()
             .url("${url.trimEnd('/')}/api/v1/entries")
             .post(body)
-            .addHeader("api-secret", apiSecret)
+            .addHeader("Authorization", "Bearer $token")
             .addHeader("Accept", "application/json")
             .build()
 
@@ -138,7 +186,10 @@ class CgmService : Service() {
             }
 
             override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
-                if (response.isSuccessful) {
+                if (response.code == 401) {
+                    Log.w("CgmService", "JWT expired, clearing and retrying next time")
+                    jwtToken = null
+                } else if (response.isSuccessful) {
                     Log.d("CgmService", "Nightscout upload successful, marking ${timestampsToMark.size} entries as uploaded")
                     val writeDb = dbHelper.writableDatabase
                     writeDb.beginTransaction()
