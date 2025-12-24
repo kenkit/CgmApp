@@ -16,6 +16,7 @@ class SettingsActivity : AppCompatActivity() {
 
         val urlEditText = findViewById<TextInputEditText>(R.id.nightscout_url)
         val secretEditText = findViewById<TextInputEditText>(R.id.api_secret)
+        val intervalEditText = findViewById<TextInputEditText>(R.id.upload_interval)
         val uploadSwitch = findViewById<SwitchMaterial>(R.id.enable_upload)
         val saveButton = findViewById<Button>(R.id.save_settings)
 
@@ -24,11 +25,13 @@ class SettingsActivity : AppCompatActivity() {
         // Load current settings
         urlEditText.setText(sharedPref.getString("nightscout_url", ""))
         secretEditText.setText(sharedPref.getString("api_secret", ""))
+        intervalEditText.setText(sharedPref.getInt("upload_interval", 5).toString())
         uploadSwitch.isChecked = sharedPref.getBoolean("enable_upload", false)
 
         saveButton.setOnClickListener {
             val url = urlEditText.text.toString().trim()
             val secret = secretEditText.text.toString().trim()
+            val intervalStr = intervalEditText.text.toString().trim()
             val enabled = uploadSwitch.isChecked
 
             if (enabled && (url.isEmpty() || secret.isEmpty())) {
@@ -36,9 +39,12 @@ class SettingsActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
 
+            val interval = intervalStr.toIntOrNull() ?: 5
+
             with(sharedPref.edit()) {
                 putString("nightscout_url", url)
                 putString("api_secret", secret)
+                putInt("upload_interval", interval)
                 putBoolean("enable_upload", enabled)
                 apply()
             }

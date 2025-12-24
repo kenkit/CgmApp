@@ -82,12 +82,15 @@ class CgmService : Service() {
         val db = dbHelper.readableDatabase
         val cursor = db.query(
             GlucoseContract.GlucoseEntry.TABLE_NAME,
-            null, null, null, null, null,
+            null,
+            "${GlucoseContract.GlucoseEntry.COLUMN_NAME_UPLOADED} = 0",
+            null,
+            null, null,
             "${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} ASC"
         )
 
         val entries = mutableListOf<NightscoutEntry>()
-        val timestampsToDelete = mutableListOf<Long>()
+        val timestampsToMark = mutableListOf<Long>()
 
         while (cursor.moveToNext()) {
             val timestamp = cursor.getLong(cursor.getColumnIndexOrThrow(GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP))
@@ -96,10 +99,8 @@ class CgmService : Service() {
             // Nightscout SGV is typically mg/dL
             val valueMgdl = (valueMmol * 18.0182).toInt()
             
-            // For the arrow, we'll use the last known arrow or just Flat for history
-            // Standard NS expects specific strings
             entries.add(NightscoutEntry(sgv = valueMgdl, date = timestamp, direction = "None"))
-            timestampsToDelete.add(timestamp)
+            timestampsToMark.add(timestamp)
         }
         cursor.close()
 
@@ -122,14 +123,17 @@ class CgmService : Service() {
 
             override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
                 if (response.isSuccessful) {
-                    Log.d("CgmService", "Nightscout upload successful")
-                    // Delete successfully uploaded entries
+                    Log.d("CgmService", "Nightscout upload successful, marking ${timestampsToMark.size} entries as uploaded")
                     val writeDb = dbHelper.writableDatabase
                     writeDb.beginTransaction()
                     try {
-                        for (ts in timestampsToDelete) {
-                            writeDb.delete(
+                        val values = ContentValues().apply {
+                            put(GlucoseContract.GlucoseEntry.COLUMN_NAME_UPLOADED, 1)
+                        }
+                        for (ts in timestampsToMark) {
+                            writeDb.update(
                                 GlucoseContract.GlucoseEntry.TABLE_NAME,
+                                values,
                                 "${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} = ?",
                                 arrayOf(ts.toString())
                             )
@@ -144,6 +148,19 @@ class CgmService : Service() {
                 response.close()
             }
         })
+    }
+
+    private val nightscoutRunnable = object : Runnable {
+        override fun run() {
+            uploadToNightscout()
+            val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
+            val intervalMins = sharedPref.getInt("upload_interval", 5)
+            handler.postDelayed(this, intervalMins * 60 * 1000L)
+        }
+    }
+
+    private fun startPeriodicNightscoutUpload() {
+        handler.post(nightscoutRunnable)
     }
 
     private val centralManagerCallback = object : BluetoothCentralManagerCallback() {
@@ -265,9 +282,6 @@ class CgmService : Service() {
             arrowIntent.setPackage(packageName)
             sendBroadcast(arrowIntent)
 
-            // Trigger Nightscout upload
-            uploadToNightscout()
-
         } else {
             Log.d("CgmService", "Nordic block too short for glucose data (${data.size} bytes)")
         }
@@ -323,6 +337,7 @@ class CgmService : Service() {
         startForeground(PersistentNotificationService.NOTIFICATION_ID, notification)
 
         startPeriodicScan()
+        startPeriodicNightscoutUpload()
 
         return START_STICKY
     }
@@ -375,6 +390,7 @@ class CgmService : Service() {
         super.onDestroy()
         stopScan()
         handler.removeCallbacks(scanRunnable)
+        handler.removeCallbacks(nightscoutRunnable)
     }
 
     override fun onBind(intent: Intent?): IBinder? {

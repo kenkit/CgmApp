@@ -39,6 +39,20 @@
             android:inputType="textPassword" />
     </com.google.android.material.textfield.TextInputLayout>
 
+    <com.google.android.material.textfield.TextInputLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Upload Interval (minutes)"
+        android:layout_marginBottom="16dp">
+
+        <com.google.android.material.textfield.TextInputEditText
+            android:id="@+id/upload_interval"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="number"
+            android:text="5" />
+    </com.google.android.material.textfield.TextInputLayout>
+
     <com.google.android.material.switchmaterial.SwitchMaterial
         android:id="@+id/enable_upload"
         android:layout_width="match_parent"
