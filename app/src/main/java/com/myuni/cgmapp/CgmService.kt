@@ -19,6 +19,9 @@ import androidx.core.app.NotificationCompat
 import com.welie.blessed.BluetoothCentralManager
 import com.welie.blessed.BluetoothCentralManagerCallback
 import com.welie.blessed.BluetoothPeripheral
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Calendar
 import java.util.UUID
 import okhttp3.MediaType.Companion.toMediaType
@@ -51,12 +54,18 @@ class CgmService : Service() {
     private lateinit var notificationService: PersistentNotificationService
     private val client = OkHttpClient()
     private val gson = Gson()
+    private val isoFormatter = DateTimeFormatter.ISO_INSTANT.withZone(ZoneId.of("UTC"))
 
     data class NightscoutEntry(
         val type: String = "sgv",
-        val sgv: Int, // sgv should be in mg/dL for many NS consumers, but many accept mmol/L * 18
+        val dateString: String,
         val date: Long,
-        val direction: String
+        val sgv: Int,
+        val direction: String,
+        val noise: Int = 1,
+        val filtered: Int = 0,
+        val unfiltered: Int = 0,
+        val rssi: Int = 100
     )
 
     private fun mapArrowToDirection(arrow: String): String {
@@ -99,7 +108,14 @@ class CgmService : Service() {
             // Nightscout SGV is typically mg/dL
             val valueMgdl = (valueMmol * 18.0182).toInt()
             
-            entries.add(NightscoutEntry(sgv = valueMgdl, date = timestamp, direction = "None"))
+            val dateString = isoFormatter.format(Instant.ofEpochMilli(timestamp))
+            
+            entries.add(NightscoutEntry(
+                sgv = valueMgdl, 
+                date = timestamp, 
+                dateString = dateString,
+                direction = "None" // We don't store direction per reading yet, using None
+            ))
             timestampsToMark.add(timestamp)
         }
         cursor.close()
