@@ -41,8 +41,8 @@ class CgmService : Service() {
         const val EXTRA_ARROW_VALUE = "EXTRA_ARROW_VALUE"
         const val EXTRA_CGM_AGE = "EXTRA_CGM_AGE"
         // Scan for 3.25 seconds as requested
-        private const val SCAN_DURATION: Long = 3250
-        private const val SCAN_INTERVAL: Long = 5 * 60 * 1000 // 5 minutes
+        private const val SCAN_DURATION: Long = 5000
+        private const val SCAN_INTERVAL: Long = 60 * 1000 // 5 minutes
     }
 
     private lateinit var centralManager: BluetoothCentralManager
