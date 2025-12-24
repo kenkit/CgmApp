@@ -40,9 +40,9 @@ class CgmService : Service() {
         const val EXTRA_CGM_VALUE = "EXTRA_CGM_VALUE"
         const val EXTRA_ARROW_VALUE = "EXTRA_ARROW_VALUE"
         const val EXTRA_CGM_AGE = "EXTRA_CGM_AGE"
-        // Scan for 5 seconds for reliability
-        private const val SCAN_DURATION: Long = 5000
-        private const val SCAN_INTERVAL: Long = 60 * 1000 // 1 minute
+        // Scan for 3.25 seconds as requested
+        private const val SCAN_DURATION: Long = 3250
+        private const val SCAN_INTERVAL: Long = 5 * 60 * 1000 // 5 minutes
     }
 
     private lateinit var centralManager: BluetoothCentralManager
@@ -79,9 +79,11 @@ class CgmService : Service() {
     private fun mapArrowToDirection(arrow: String): String {
         return when (arrow) {
             "↑↑" -> "DoubleUp"
-            "↑" -> "SingleUp"
-            "→" -> "Flat"
-            "↓" -> "SingleDown"
+            "↑"  -> "SingleUp"
+            "↗"  -> "FortyFiveUp"
+            "→"  -> "Flat"
+            "↘"  -> "FortyFiveDown"
+            "↓"  -> "SingleDown"
             "↓↓" -> "DoubleDown"
             else -> "None"
         }
@@ -313,49 +315,102 @@ class CgmService : Service() {
         return blocks
     }
 
+    private fun calculateVelocity(readings: List<Pair<Double, Long>>): Double {
+        if (readings.size < 2) return 0.0
+
+        val n = readings.size
+        var sumX = 0.0
+        var sumY = 0.0
+        var sumXY = 0.0
+        var sumX2 = 0.0
+
+        // Use the oldest reading as the time origin (x=0) to keep numbers small
+        val originTs = readings.last().second
+
+        for (reading in readings) {
+            val x = (reading.second - originTs).toDouble() / (60 * 1000) // Minutes from origin
+            val y = reading.first // mmol/L
+            sumX += x
+            sumY += y
+            sumXY += x * y
+            sumX2 += x * x
+        }
+
+        val denominator = (n * sumX2 - sumX * sumX)
+        if (denominator == 0.0) return 0.0
+
+        return (n * sumXY - sumX * sumY) / denominator
+    }
+
+    private fun loadRecentCgmData(limit: Int): List<Pair<Double, Long>> {
+        val db = dbHelper.readableDatabase
+        val projection = arrayOf(
+            GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE,
+            GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP
+        )
+        val sortOrder = "${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} DESC"
+        val result = mutableListOf<Pair<Double, Long>>()
+        val cursor = db.query(
+            GlucoseContract.GlucoseEntry.TABLE_NAME,
+            projection,
+            null,
+            null,
+            null,
+            null,
+            sortOrder,
+            limit.toString()
+        )
+
+        with(cursor) {
+            while (moveToNext()) {
+                val value = getDouble(getColumnIndexOrThrow(GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE))
+                val ts = getLong(getColumnIndexOrThrow(GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP))
+                result.add(Pair(value, ts))
+            }
+            close()
+        }
+        return result
+    }
+
     private fun processNordicData(data: ByteArray, rssi: Int) {
         val hexString = data.joinToString(separator = " ") { String.format("%02X", it) }
         Log.d("CgmService", "Processing Nordic Mfg Data: $hexString")
 
-        // Fetch last value from DB for comparison
-        val dbLastValue = loadLastCgmValue()
-
-        // Based on aidex.cpp:
-        // POSITIONAL_CORRECTION = 2
-        // glucose = data[POSITIONAL_CORRECTION + 10] => index 12
-        // age = data[POSITIONAL_CORRECTION + 1] => index 3
-        // phase = data[POSITIONAL_CORRECTION + 9] => index 11
-        
         if (data.size >= 13) {
             val glucoseByte = data[12]
             val glucoseVal = (glucoseByte.toInt() and 0xFF) / 10.0
 
             val phase = data[11].toInt() and 0xFF
             val ageInMinutes = (data[3].toInt() and 0xFF) / 6
-            var arrow = ""
             
-            val diff = if (dbLastValue > 0) glucoseVal - dbLastValue else 0.0
+            // Calculate timestamp based on age
+            val currentTime = Calendar.getInstance().timeInMillis
+            val currentTimestamp = currentTime - (ageInMinutes * 60 * 1000)
+
+            // Fetch last 3 readings + current 1 = 4 points for regression (15 min window)
+            val readings = loadRecentCgmData(3).toMutableList()
+            readings.add(0, Pair(glucoseVal, currentTimestamp))
             
-            // Thresholds for mmol/L per minute (assuming ~1 min intervals)
-            arrow = when {
-                diff >= 0.11 -> "↑↑"      // Rising quickly
-                diff >= 0.06 -> "↑"       // Rising slowly
-                diff <= -0.11 -> "↓↓"     // Falling quickly
-                diff <= -0.06 -> "↓"      // Falling slowly
-                else -> "→"               // Steady
+            val velocity = calculateVelocity(readings)
+            
+            // Thresholds in mmol/L per minute
+            val arrow = when {
+                velocity >= 0.166 -> "↑↑" // DoubleUp (>3 mg/dL/min)
+                velocity >= 0.111 -> "↑"  // SingleUp (>2 mg/dL/min)
+                velocity >= 0.055 -> "↗"  // FortyFiveUp (>1 mg/dL/min)
+                velocity <= -0.166 -> "↓↓" // DoubleDown
+                velocity <= -0.111 -> "↓"  // SingleDown
+                velocity <= -0.055 -> "↘"  // FortyFiveDown
+                else -> "→"               // Flat
             }
             last_cgm_value = glucoseVal
 
-            Log.d("CgmService", "Glucose Found: $glucoseVal, diff: $diff, arrow: $arrow,  Phase: $phase, Age: $ageInMinutes (mins), RSSI: $rssi")
-
-            // Calculate timestamp based on age
-            val currentTime = Calendar.getInstance().timeInMillis
-            val timestamp = currentTime - (ageInMinutes * 60 * 1000)
+            Log.d("CgmService", "Glucose: $glucoseVal, Velocity: ${String.format("%.3f", velocity)}, Arrow: $arrow, RSSI: $rssi")
 
             // Save to database
             val db = dbHelper.writableDatabase
             val values = ContentValues().apply {
-                put(GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP, timestamp)
+                put(GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP, currentTimestamp)
                 put(GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE, glucoseVal)
                 put(GlucoseContract.GlucoseEntry.COLUMN_NAME_RSSI, rssi)
                 put(GlucoseContract.GlucoseEntry.COLUMN_NAME_DIRECTION, arrow)
@@ -381,6 +436,9 @@ class CgmService : Service() {
             arrowIntent.setPackage(packageName)
             sendBroadcast(arrowIntent)
 
+            // Trigger Nightscout upload
+            uploadToNightscout()
+
         } else {
             Log.d("CgmService", "Nordic block too short for glucose data (${data.size} bytes)")
         }
@@ -391,7 +449,9 @@ class CgmService : Service() {
         Log.d("CgmService", "CgmService onCreate")
         notificationService = PersistentNotificationService(this)
         dbHelper = DatabaseHelper(this)
-        last_cgm_value = loadLastCgmValue()
+        
+        val lastData = loadRecentCgmData(1)
+        last_cgm_value = if (lastData.isNotEmpty()) lastData[0].first else 0.0
 
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "CgmApp::ScanWakeLock")
@@ -403,32 +463,6 @@ class CgmService : Service() {
         } catch (e: Exception) {
             Log.e("CgmService", "Error initializing CentralManager", e)
         }
-    }
-
-    private fun loadLastCgmValue(): Double {
-        val db = dbHelper.readableDatabase
-        val projection = arrayOf(GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE)
-        val sortOrder = "${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} DESC"
-        var lastValue = 0.0
-        val cursor = db.query(
-            GlucoseContract.GlucoseEntry.TABLE_NAME,
-            projection,
-            null,
-            null,
-            null,
-            null,
-            sortOrder,
-            "1"
-        )
-
-        with(cursor) {
-            if (moveToNext()) {
-                lastValue = getDouble(getColumnIndexOrThrow(GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE))
-                Log.d("CgmService", "Loaded last CGM value from DB: $lastValue")
-            }
-            close()
-        }
-        return lastValue
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
