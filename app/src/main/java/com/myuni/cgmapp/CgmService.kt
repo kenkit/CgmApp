@@ -40,7 +40,7 @@ class CgmService : Service() {
         const val EXTRA_ARROW_VALUE = "EXTRA_ARROW_VALUE"
         const val EXTRA_CGM_AGE = "EXTRA_CGM_AGE"
         // Scan for 1.25 seconds as requested
-        private const val SCAN_DURATION: Long = 5250
+        private const val SCAN_DURATION: Long = 3250
         private const val SCAN_INTERVAL: Long = 60 * 1000 // 1 minute
     }
 
