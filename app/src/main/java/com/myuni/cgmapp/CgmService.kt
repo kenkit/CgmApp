@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.bluetooth.le.ScanResult
 import android.content.ContentValues
+import android.content.Context
 import android.content.Intent
 import android.database.sqlite.SQLiteDatabase
 import android.os.Build
@@ -20,6 +21,11 @@ import com.welie.blessed.BluetoothCentralManagerCallback
 import com.welie.blessed.BluetoothPeripheral
 import java.util.Calendar
 import java.util.UUID
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import com.google.gson.Gson
 
 class CgmService : Service() {
 
@@ -43,6 +49,102 @@ class CgmService : Service() {
     private val SERVICE_UUID = UUID.fromString("0000f000-0000-1000-8000-00805f9b34fb")
     private lateinit var dbHelper: DatabaseHelper
     private lateinit var notificationService: PersistentNotificationService
+    private val client = OkHttpClient()
+    private val gson = Gson()
+
+    data class NightscoutEntry(
+        val type: String = "sgv",
+        val sgv: Int, // sgv should be in mg/dL for many NS consumers, but many accept mmol/L * 18
+        val date: Long,
+        val direction: String
+    )
+
+    private fun mapArrowToDirection(arrow: String): String {
+        return when (arrow) {
+            "↑" -> "DoubleUp"
+            "↗" -> "SingleUp"
+            "→" -> "Flat"
+            "↘" -> "SingleDown"
+            "↓" -> "DoubleDown"
+            else -> "None"
+        }
+    }
+
+    private fun uploadToNightscout() {
+        val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
+        if (!sharedPref.getBoolean("enable_upload", false)) return
+
+        val url = sharedPref.getString("nightscout_url", "") ?: ""
+        val apiSecret = sharedPref.getString("api_secret", "") ?: ""
+
+        if (url.isEmpty() || apiSecret.isEmpty()) return
+
+        val db = dbHelper.readableDatabase
+        val cursor = db.query(
+            GlucoseContract.GlucoseEntry.TABLE_NAME,
+            null, null, null, null, null,
+            "${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} ASC"
+        )
+
+        val entries = mutableListOf<NightscoutEntry>()
+        val timestampsToDelete = mutableListOf<Long>()
+
+        while (cursor.moveToNext()) {
+            val timestamp = cursor.getLong(cursor.getColumnIndexOrThrow(GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP))
+            val valueMmol = cursor.getDouble(cursor.getColumnIndexOrThrow(GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE))
+            
+            // Nightscout SGV is typically mg/dL
+            val valueMgdl = (valueMmol * 18.0182).toInt()
+            
+            // For the arrow, we'll use the last known arrow or just Flat for history
+            // Standard NS expects specific strings
+            entries.add(NightscoutEntry(sgv = valueMgdl, date = timestamp, direction = "None"))
+            timestampsToDelete.add(timestamp)
+        }
+        cursor.close()
+
+        if (entries.isEmpty()) return
+
+        val json = gson.toJson(entries)
+        val body = json.toRequestBody("application/json".toMediaType())
+        
+        val request = Request.Builder()
+            .url("${url.trimEnd('/')}/api/v1/entries")
+            .post(body)
+            .addHeader("api-secret", apiSecret)
+            .addHeader("Accept", "application/json")
+            .build()
+
+        client.newCall(request).enqueue(object : okhttp3.Callback {
+            override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
+                Log.e("CgmService", "Nightscout upload failed", e)
+            }
+
+            override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+                if (response.isSuccessful) {
+                    Log.d("CgmService", "Nightscout upload successful")
+                    // Delete successfully uploaded entries
+                    val writeDb = dbHelper.writableDatabase
+                    writeDb.beginTransaction()
+                    try {
+                        for (ts in timestampsToDelete) {
+                            writeDb.delete(
+                                GlucoseContract.GlucoseEntry.TABLE_NAME,
+                                "${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} = ?",
+                                arrayOf(ts.toString())
+                            )
+                        }
+                        writeDb.setTransactionSuccessful()
+                    } finally {
+                        writeDb.endTransaction()
+                    }
+                } else {
+                    Log.e("CgmService", "Nightscout upload failed with code: ${response.code} ${response.message}")
+                }
+                response.close()
+            }
+        })
+    }
 
     private val centralManagerCallback = object : BluetoothCentralManagerCallback() {
         override fun onDiscovered(peripheral: BluetoothPeripheral, scanResult: ScanResult) {
@@ -163,6 +265,9 @@ class CgmService : Service() {
             arrowIntent.setPackage(packageName)
             sendBroadcast(arrowIntent)
 
+            // Trigger Nightscout upload
+            uploadToNightscout()
+
         } else {
             Log.d("CgmService", "Nordic block too short for glucose data (${data.size} bytes)")
         }
@@ -211,9 +316,10 @@ class CgmService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d("CgmService", "CgmService onStartCommand")
+        Log.d("CgmService", "CgmService onStartCommand - Attempting to start foreground")
         
         val notification = notificationService.getInitialNotification(dbHelper)
+        Log.d("CgmService", "Got initial notification, calling startForeground")
         startForeground(PersistentNotificationService.NOTIFICATION_ID, notification)
 
         startPeriodicScan()

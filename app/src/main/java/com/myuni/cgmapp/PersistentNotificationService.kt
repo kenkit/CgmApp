@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import java.util.Calendar
 
@@ -23,10 +24,11 @@ class PersistentNotificationService(private val context: Context) {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Log.d("PersistentNotif", "Creating notification channel")
             val serviceChannel = NotificationChannel(
                 CHANNEL_ID,
                 "CGM Status Channel",
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_DEFAULT
             )
             val manager = context.getSystemService(NotificationManager::class.java)
             manager?.createNotificationChannel(serviceChannel)
@@ -36,12 +38,14 @@ class PersistentNotificationService(private val context: Context) {
     fun updateNotification(value: Double, arrow: String, age: Int) {
         val title = "$value $arrow"
         val text = "Updated $age mins ago"
+        Log.d("PersistentNotif", "Updating notification: $title")
         val notification = createNotification(title, text)
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(NOTIFICATION_ID, notification)
     }
 
     fun createNotification(title: String, contentText: String): Notification {
+        Log.d("PersistentNotif", "Creating notification object: $title")
         val notificationIntent = Intent(context, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
             context,
@@ -57,7 +61,8 @@ class PersistentNotificationService(private val context: Context) {
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .build()
     }
 

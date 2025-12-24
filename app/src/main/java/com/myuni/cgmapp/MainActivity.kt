@@ -86,6 +86,11 @@ class MainActivity : AppCompatActivity() {
         cgmValueTextView = findViewById(R.id.cgmvalue)
         arrowTextView = findViewById(R.id.arrow)
         sampleAgeTextView = findViewById(R.id.sample_age)
+        val settingsButton = findViewById<android.widget.ImageButton>(R.id.settings_button)
+
+        settingsButton.setOnClickListener {
+            startActivity(Intent(this, SettingsActivity::class.java))
+        }
 
         loadLastValueFromDb()
         
