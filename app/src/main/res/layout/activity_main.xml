@@ -9,25 +9,49 @@
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:orientation="horizontal"
+        android:orientation="vertical"
         android:gravity="center">
 
-        <TextView
-            android:id="@+id/cgmvalue"
+        <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="00"
-            android:textStyle="bold"
-            android:textSize="60sp" />
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:id="@+id/cgmvalue"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="00"
+                android:textStyle="bold"
+                android:textSize="60sp" />
+
+            <TextView
+                android:id="@+id/mmoltext"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="mmol"
+                android:textStyle="bold"
+                android:textSize="40sp"
+                android:layout_marginStart="8dp"/>
+
+            <TextView
+                android:id="@+id/arrow"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="→"
+                android:textStyle="bold"
+                android:textSize="40sp"
+                android:layout_marginStart="8dp"/>
+        </LinearLayout>
 
         <TextView
-            android:id="@+id/mmoltext"
+            android:id="@+id/sample_age"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="mmol"
-            android:textStyle="bold"
-            android:textSize="40sp"
-            android:layout_marginStart="8dp"/> <!-- Add margin for spacing -->
+            android:text="-- mins ago"
+            android:textSize="16sp"
+            android:layout_marginTop="8dp"/>
 
     </LinearLayout>
 </RelativeLayout>

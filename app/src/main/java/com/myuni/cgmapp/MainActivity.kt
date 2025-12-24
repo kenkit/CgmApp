@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Bundle
 import android.widget.TextView
 import android.widget.Toast
+import java.util.Calendar
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -22,12 +23,22 @@ import androidx.core.view.WindowInsetsCompat
 class MainActivity : AppCompatActivity() {
 
     private lateinit var cgmValueTextView: TextView
+    private lateinit var arrowTextView: TextView
+    private lateinit var sampleAgeTextView: TextView
     
     private val cgmReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == CgmService.ACTION_CGM_UPDATE) {
-                val value = intent.getDoubleExtra(CgmService.EXTRA_CGM_VALUE, 0.0)
-                cgmValueTextView.text = value.toString()
+            when (intent?.action) {
+                CgmService.ACTION_CGM_UPDATE -> {
+                    val value = intent.getDoubleExtra(CgmService.EXTRA_CGM_VALUE, 0.0)
+                    val age = intent.getIntExtra(CgmService.EXTRA_CGM_AGE, 0)
+                    cgmValueTextView.text = value.toString()
+                    sampleAgeTextView.text = "$age mins ago"
+                }
+                CgmService.ACTION_ARROW_UPDATE -> {
+                    val arrow = intent.getStringExtra(CgmService.EXTRA_ARROW_VALUE)
+                    arrowTextView.text = arrow ?: "→"
+                }
             }
         }
     }
@@ -55,18 +66,53 @@ class MainActivity : AppCompatActivity() {
         }
 
         cgmValueTextView = findViewById(R.id.cgmvalue)
+        arrowTextView = findViewById(R.id.arrow)
+        sampleAgeTextView = findViewById(R.id.sample_age)
 
+        loadLastValueFromDb()
         checkPermissionsAndStartService()
+    }
+
+    private fun loadLastValueFromDb() {
+        val dbHelper = DatabaseHelper(this)
+        val db = dbHelper.readableDatabase
+        val projection = arrayOf(
+            GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE,
+            GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP
+        )
+        val sortOrder = "${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} DESC"
+        val cursor = db.query(
+            GlucoseContract.GlucoseEntry.TABLE_NAME,
+            projection,
+            null,
+            null,
+            null,
+            null,
+            sortOrder,
+            "1"
+        )
+
+        with(cursor) {
+            if (moveToNext()) {
+                val value = getDouble(getColumnIndexOrThrow(GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE))
+                val timestamp = getLong(getColumnIndexOrThrow(GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP))
+                val currentTime = Calendar.getInstance().timeInMillis
+                val ageInMinutes = (currentTime - timestamp) / (60 * 1000)
+                
+                cgmValueTextView.text = value.toString()
+                sampleAgeTextView.text = "$ageInMinutes mins ago"
+            }
+            close()
+        }
     }
 
     override fun onResume() {
         super.onResume()
-        val filter = IntentFilter(CgmService.ACTION_CGM_UPDATE)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(cgmReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(cgmReceiver, filter)
+        val filter = IntentFilter().apply {
+            addAction(CgmService.ACTION_CGM_UPDATE)
+            addAction(CgmService.ACTION_ARROW_UPDATE)
         }
+        ContextCompat.registerReceiver(this, cgmReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
     }
 
     override fun onPause() {

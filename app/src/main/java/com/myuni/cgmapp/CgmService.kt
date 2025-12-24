@@ -6,7 +6,9 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.bluetooth.le.ScanResult
+import android.content.ContentValues
 import android.content.Intent
+import android.database.sqlite.SQLiteDatabase
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -16,6 +18,7 @@ import androidx.core.app.NotificationCompat
 import com.welie.blessed.BluetoothCentralManager
 import com.welie.blessed.BluetoothCentralManagerCallback
 import com.welie.blessed.BluetoothPeripheral
+import java.util.Calendar
 import java.util.UUID
 
 class CgmService : Service() {
@@ -23,24 +26,27 @@ class CgmService : Service() {
     companion object {
         const val CHANNEL_ID = "CgmServiceChannel"
         const val ACTION_CGM_UPDATE = "com.myuni.cgmapp.CGM_UPDATE"
+        const val ACTION_ARROW_UPDATE = "com.myuni.cgmapp.ARROW_UPDATE"
         const val EXTRA_CGM_VALUE = "EXTRA_CGM_VALUE"
+        const val EXTRA_ARROW_VALUE = "EXTRA_ARROW_VALUE"
         const val EXTRA_CGM_AGE = "EXTRA_CGM_AGE"
         // Scan for 1.25 seconds as requested
         private const val SCAN_DURATION: Long = 5250
-        private const val SCAN_INTERVAL: Long = 60* 1000 // 3 minutes
+        private const val SCAN_INTERVAL: Long = 60 * 1000 // 1 minute
     }
 
     private lateinit var centralManager: BluetoothCentralManager
     private val handler = Handler(Looper.getMainLooper())
     private var isScanning = false
-
+    private var last_cgm_value = 0.0
     // Service UUID
     private val SERVICE_UUID = UUID.fromString("0000f000-0000-1000-8000-00805f9b34fb")
+    private lateinit var dbHelper: DatabaseHelper
 
     private val centralManagerCallback = object : BluetoothCentralManagerCallback() {
         override fun onDiscovered(peripheral: BluetoothPeripheral, scanResult: ScanResult) {
             Log.d("CgmService", "Discovered: ${peripheral.name} (${peripheral.address})")
-            
+
             val record = scanResult.scanRecord
             if (record != null) {
                 // Log Raw Bytes
@@ -50,7 +56,7 @@ class CgmService : Service() {
                     Log.d("CgmService", "Raw Scan Record: $rawHex")
 
                     // Manually parse raw bytes to find all manufacturer data blocks
-                    // Android's ScanRecord.getManufacturerSpecificData() (SparseArray) 
+                    // Android's ScanRecord.getManufacturerSpecificData() (SparseArray)
                     // overwrites if multiple blocks have the same Company ID.
                     val allMfgData = extractManufacturerData(rawBytes)
                     for (data in allMfgData) {
@@ -77,10 +83,10 @@ class CgmService : Service() {
             val len = rawBytes[i].toInt() and 0xFF
             if (len == 0) break
             if (i + len >= rawBytes.size) break
-            
+
             val type = rawBytes[i + 1].toInt() and 0xFF
             if (type == 0xFF && len >= 3) {
-                // It's manufacturer data. 
+                // It's manufacturer data.
                 // Copy from index i+2 (Company ID) for (len-1) bytes
                 val data = rawBytes.copyOfRange(i + 2, i + len + 1)
                 blocks.add(data)
@@ -94,6 +100,9 @@ class CgmService : Service() {
         val hexString = data.joinToString(separator = " ") { String.format("%02X", it) }
         Log.d("CgmService", "Processing Nordic Mfg Data: $hexString")
 
+        // Fetch last value from DB for comparison
+        val dbLastValue = loadLastCgmValue()
+
         // Based on aidex.cpp:
         // POSITIONAL_CORRECTION = 2
         // glucose = data[POSITIONAL_CORRECTION + 10] => index 12
@@ -103,17 +112,47 @@ class CgmService : Service() {
         if (data.size >= 13) {
             val glucoseByte = data[12]
             val glucoseVal = (glucoseByte.toInt() and 0xFF) / 10.0
-            
+
             val phase = data[11].toInt() and 0xFF
-            val age = (data[3].toInt() and 0xFF) / 6
+            val ageInMinutes = (data[3].toInt() and 0xFF) / 6
+            var arrow = ""
             
-            Log.d("CgmService", "Glucose Found: $glucoseVal, Phase: $phase, Age: $age (mins)")
+            if (glucoseVal > dbLastValue && dbLastValue != 0.0) {
+                arrow = "\u2197" // North East arrow
+            } else if (glucoseVal < dbLastValue && dbLastValue != 0.0) {
+                arrow = "\u2198" // South East arrow
+            } else {
+                arrow = "\u2192" // Horizontal arrow
+            }
+            last_cgm_value = glucoseVal
+
+            Log.d("CgmService", "Glucose Found: $glucoseVal, arrow: $arrow,  Phase: $phase, Age: $ageInMinutes (mins)")
+
+            // Calculate timestamp based on age
+            val currentTime = Calendar.getInstance().timeInMillis
+            val timestamp = currentTime - (ageInMinutes * 60 * 1000)
+
+            // Save to database
+            val db = dbHelper.writableDatabase
+            val values = ContentValues().apply {
+                put(GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP, timestamp)
+                put(GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE, glucoseVal)
+            }
+            db.insertWithOnConflict(GlucoseContract.GlucoseEntry.TABLE_NAME, null, values, SQLiteDatabase.CONFLICT_IGNORE)
 
             // Broadcast the value
             val intent = Intent(ACTION_CGM_UPDATE)
             intent.putExtra(EXTRA_CGM_VALUE, glucoseVal)
+            intent.putExtra(EXTRA_CGM_AGE, ageInMinutes)
             intent.setPackage(packageName)
             sendBroadcast(intent)
+
+            // Broadcast the arrow
+            val arrowIntent = Intent(ACTION_ARROW_UPDATE)
+            arrowIntent.putExtra(EXTRA_ARROW_VALUE, arrow)
+            arrowIntent.setPackage(packageName)
+            sendBroadcast(arrowIntent)
+
         } else {
             Log.d("CgmService", "Nordic block too short for glucose data (${data.size} bytes)")
         }
@@ -123,6 +162,8 @@ class CgmService : Service() {
         super.onCreate()
         Log.d("CgmService", "CgmService onCreate")
         createNotificationChannel()
+        dbHelper = DatabaseHelper(this)
+        last_cgm_value = loadLastCgmValue()
 
         try {
             // Initialize Blessed Central Manager
@@ -131,6 +172,32 @@ class CgmService : Service() {
         } catch (e: Exception) {
             Log.e("CgmService", "Error initializing CentralManager", e)
         }
+    }
+
+    private fun loadLastCgmValue(): Double {
+        val db = dbHelper.readableDatabase
+        val projection = arrayOf(GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE)
+        val sortOrder = "${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} DESC"
+        var lastValue = 0.0
+        val cursor = db.query(
+            GlucoseContract.GlucoseEntry.TABLE_NAME,
+            projection,
+            null,
+            null,
+            null,
+            null,
+            sortOrder,
+            "1"
+        )
+
+        with(cursor) {
+            if (moveToNext()) {
+                lastValue = getDouble(getColumnIndexOrThrow(GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE))
+                Log.d("CgmService", "Loaded last CGM value from DB: $lastValue")
+            }
+            close()
+        }
+        return lastValue
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
