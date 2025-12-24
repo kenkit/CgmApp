@@ -53,7 +53,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateColors(value: Double, arrow: String) {
         val color = when {
-            value <= 3.9 || arrow == "↓" -> Color.RED
+            value <= 3.9 || arrow == "↓" || arrow == "↓↓" -> Color.RED
             value >= 10.0 -> Color.parseColor("#FFA500") // Orange/Yellow
             else -> Color.parseColor("#008000") // Green
         }

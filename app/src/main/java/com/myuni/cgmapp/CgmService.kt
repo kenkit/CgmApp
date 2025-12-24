@@ -76,11 +76,11 @@ class CgmService : Service() {
 
     private fun mapArrowToDirection(arrow: String): String {
         return when (arrow) {
-            "↑" -> "DoubleUp"
-            "↗" -> "SingleUp"
+            "↑↑" -> "DoubleUp"
+            "↑" -> "SingleUp"
             "→" -> "Flat"
-            "↘" -> "SingleDown"
-            "↓" -> "DoubleDown"
+            "↓" -> "SingleDown"
+            "↓↓" -> "DoubleDown"
             else -> "None"
         }
     }
@@ -174,6 +174,7 @@ class CgmService : Service() {
             val timestamp = cursor.getLong(cursor.getColumnIndexOrThrow(GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP))
             val valueMmol = cursor.getDouble(cursor.getColumnIndexOrThrow(GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE))
             val rssi = cursor.getInt(cursor.getColumnIndexOrThrow(GlucoseContract.GlucoseEntry.COLUMN_NAME_RSSI))
+            val arrowSymbol = cursor.getString(cursor.getColumnIndexOrThrow(GlucoseContract.GlucoseEntry.COLUMN_NAME_DIRECTION)) ?: "→"
             
             val valueMgdl = (valueMmol * 18.0182).toInt()
             val dateString = isoFormatter.format(Instant.ofEpochMilli(timestamp))
@@ -182,7 +183,7 @@ class CgmService : Service() {
                 sgv = valueMgdl, 
                 date = timestamp, 
                 dateString = dateString,
-                direction = "None",
+                direction = mapArrowToDirection(arrowSymbol),
                 rssi = rssi
             ))
             timestampsToMark.add(timestamp)
@@ -335,11 +336,11 @@ class CgmService : Service() {
             
             // Thresholds for mmol/L per minute (assuming ~1 min intervals)
             arrow = when {
-                diff >= 0.11 -> "↑"      // Rising fast
-                diff >= 0.06 -> "↗"      // Rising slowly
-                diff <= -0.11 -> "↓"     // Falling fast
-                diff <= -0.06 -> "↘"     // Falling slowly
-                else -> "→"              // Stable
+                diff >= 0.11 -> "↑↑"      // Rising quickly
+                diff >= 0.06 -> "↑"       // Rising slowly
+                diff <= -0.11 -> "↓↓"     // Falling quickly
+                diff <= -0.06 -> "↓"      // Falling slowly
+                else -> "→"               // Steady
             }
             last_cgm_value = glucoseVal
 
@@ -355,6 +356,7 @@ class CgmService : Service() {
                 put(GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP, timestamp)
                 put(GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE, glucoseVal)
                 put(GlucoseContract.GlucoseEntry.COLUMN_NAME_RSSI, rssi)
+                put(GlucoseContract.GlucoseEntry.COLUMN_NAME_DIRECTION, arrow)
             }
             db.insertWithOnConflict(GlucoseContract.GlucoseEntry.TABLE_NAME, null, values, SQLiteDatabase.CONFLICT_IGNORE)
 

@@ -55,7 +55,7 @@ class CgmWidget : AppWidgetProvider() {
 
                 // Color coding
                 val color = when {
-                    value <= 3.9 || arrow == "↓" -> Color.RED
+                    value <= 3.9 || arrow == "↓" || arrow == "↓↓" -> Color.RED
                     value >= 10.0 -> Color.parseColor("#FFA500") // Orange
                     else -> Color.parseColor("#008000") // Green
                 }
