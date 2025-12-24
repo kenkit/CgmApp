@@ -117,16 +117,19 @@ class CgmService : Service() {
             val ageInMinutes = (data[3].toInt() and 0xFF) / 6
             var arrow = ""
             
-            if (glucoseVal > dbLastValue && dbLastValue != 0.0) {
-                arrow = "\u2197" // North East arrow
-            } else if (glucoseVal < dbLastValue && dbLastValue != 0.0) {
-                arrow = "\u2198" // South East arrow
-            } else {
-                arrow = "\u2192" // Horizontal arrow
+            val diff = if (dbLastValue > 0) glucoseVal - dbLastValue else 0.0
+            
+            // Thresholds for mmol/L per minute (assuming ~1 min intervals)
+            arrow = when {
+                diff >= 0.11 -> "↑"      // Rising fast
+                diff >= 0.06 -> "↗"      // Rising slowly
+                diff <= -0.11 -> "↓"     // Falling fast
+                diff <= -0.06 -> "↘"     // Falling slowly
+                else -> "→"              // Stable
             }
             last_cgm_value = glucoseVal
 
-            Log.d("CgmService", "Glucose Found: $glucoseVal, arrow: $arrow,  Phase: $phase, Age: $ageInMinutes (mins)")
+            Log.d("CgmService", "Glucose Found: $glucoseVal, diff: $diff, arrow: $arrow,  Phase: $phase, Age: $ageInMinutes (mins)")
 
             // Calculate timestamp based on age
             val currentTime = Calendar.getInstance().timeInMillis

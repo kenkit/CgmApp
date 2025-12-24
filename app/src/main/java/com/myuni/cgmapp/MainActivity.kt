@@ -10,6 +10,7 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.graphics.Color
 import android.widget.TextView
 import android.widget.Toast
 import java.util.Calendar
@@ -34,13 +35,28 @@ class MainActivity : AppCompatActivity() {
                     val age = intent.getIntExtra(CgmService.EXTRA_CGM_AGE, 0)
                     cgmValueTextView.text = value.toString()
                     sampleAgeTextView.text = "$age mins ago"
+                    updateColors(value, arrowTextView.text.toString())
                 }
                 CgmService.ACTION_ARROW_UPDATE -> {
-                    val arrow = intent.getStringExtra(CgmService.EXTRA_ARROW_VALUE)
-                    arrowTextView.text = arrow ?: "→"
+                    val arrow = intent.getStringExtra(CgmService.EXTRA_ARROW_VALUE) ?: "→"
+                    arrowTextView.text = arrow
+                    // Re-run color update when arrow changes
+                    val currentValueStr = cgmValueTextView.text.toString()
+                    val currentValue = currentValueStr.toDoubleOrNull() ?: 0.0
+                    updateColors(currentValue, arrow)
                 }
             }
         }
+    }
+
+    private fun updateColors(value: Double, arrow: String) {
+        val color = when {
+            value <= 3.9 || arrow == "↓" -> Color.RED
+            value >= 10.0 -> Color.parseColor("#FFA500") // Orange/Yellow
+            else -> Color.parseColor("#008000") // Green
+        }
+        cgmValueTextView.setTextColor(color)
+        arrowTextView.setTextColor(color)
     }
 
     private val requestPermissionLauncher =
@@ -101,6 +117,9 @@ class MainActivity : AppCompatActivity() {
                 
                 cgmValueTextView.text = value.toString()
                 sampleAgeTextView.text = "$ageInMinutes mins ago"
+                
+                // We don't have the last arrow in DB, default to horizontal for coloring if not known
+                updateColors(value, "→")
             }
             close()
         }
