@@ -14,6 +14,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.welie.blessed.BluetoothCentralManager
@@ -39,8 +40,8 @@ class CgmService : Service() {
         const val EXTRA_CGM_VALUE = "EXTRA_CGM_VALUE"
         const val EXTRA_ARROW_VALUE = "EXTRA_ARROW_VALUE"
         const val EXTRA_CGM_AGE = "EXTRA_CGM_AGE"
-        // Scan for 1.25 seconds as requested
-        private const val SCAN_DURATION: Long = 3250
+        // Scan for 5 seconds for reliability
+        private const val SCAN_DURATION: Long = 5000
         private const val SCAN_INTERVAL: Long = 60 * 1000 // 1 minute
     }
 
@@ -48,6 +49,7 @@ class CgmService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var isScanning = false
     private var last_cgm_value = 0.0
+    private var wakeLock: PowerManager.WakeLock? = null
     // Service UUID
     private val SERVICE_UUID = UUID.fromString("0000f000-0000-1000-8000-00805f9b34fb")
     private lateinit var dbHelper: DatabaseHelper
@@ -391,6 +393,9 @@ class CgmService : Service() {
         dbHelper = DatabaseHelper(this)
         last_cgm_value = loadLastCgmValue()
 
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "CgmApp::ScanWakeLock")
+
         try {
             // Initialize Blessed Central Manager
             centralManager = BluetoothCentralManager(this, centralManagerCallback, Handler(Looper.getMainLooper()))
@@ -461,6 +466,9 @@ class CgmService : Service() {
 
         Log.d("CgmService", "Starting scan cycle...")
         try {
+            // Acquire wake lock to ensure CPU doesn't sleep during scan
+            wakeLock?.acquire(SCAN_DURATION + 1000)
+
             // Scan for peripherals with our specific Service UUID
             centralManager.scanForPeripheralsWithServices(listOf(SERVICE_UUID))
             isScanning = true
@@ -471,6 +479,7 @@ class CgmService : Service() {
             }, SCAN_DURATION)
         } catch (e: Exception) {
             Log.e("CgmService", "Error starting scan", e)
+            if (wakeLock?.isHeld == true) wakeLock?.release()
         }
     }
 
@@ -481,6 +490,10 @@ class CgmService : Service() {
         Log.d("CgmService", "Stopping scan.")
         centralManager.stopScan()
         isScanning = false
+
+        if (wakeLock?.isHeld == true) {
+            wakeLock?.release()
+        }
     }
 
     override fun onDestroy() {
