@@ -70,7 +70,8 @@ class CgmService : Service() {
     )
 
     data class AuthResponse(
-        val token: String
+        val token: String,
+        val exp: Long
     )
 
     private fun mapArrowToDirection(arrow: String): String {
@@ -84,6 +85,13 @@ class CgmService : Service() {
         }
     }
 
+    private fun isTokenExpired(): Boolean {
+        val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
+        val exp = sharedPref.getLong("jwt_exp", 0)
+        // Check if token expires in the next 60 seconds to be safe
+        return (System.currentTimeMillis() / 1000) > (exp - 60)
+    }
+
     private fun uploadToNightscout() {
         val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
         if (!sharedPref.getBoolean("enable_upload", false)) return
@@ -93,8 +101,10 @@ class CgmService : Service() {
 
         if (url.isEmpty() || apiSecret.isEmpty()) return
 
-        // If we don't have a token yet, fetch it first
-        if (jwtToken == null) {
+        jwtToken = sharedPref.getString("jwt_token", null)
+
+        // If we don't have a token or it's expired, fetch it first
+        if (jwtToken == null || isTokenExpired()) {
             fetchJwtAndUpload(url, apiSecret)
             return
         }
@@ -121,7 +131,16 @@ class CgmService : Service() {
                     try {
                         val authResponse = gson.fromJson(body, AuthResponse::class.java)
                         jwtToken = authResponse.token
-                        Log.d("CgmService", "Nightscout authorization successful")
+                        
+                        // Save to preferences
+                        val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
+                        with(sharedPref.edit()) {
+                            putString("jwt_token", authResponse.token)
+                            putLong("jwt_exp", authResponse.exp)
+                            apply()
+                        }
+                        
+                        Log.d("CgmService", "Nightscout authorization successful, expires at ${authResponse.exp}")
                         // Now perform the actual upload
                         performUpload(url)
                     } catch (e: Exception) {
@@ -189,8 +208,14 @@ class CgmService : Service() {
 
             override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
                 if (response.code == 401) {
-                    Log.w("CgmService", "JWT expired, clearing and retrying next time")
+                    Log.w("CgmService", "JWT expired or invalid, clearing from prefs and retrying next time")
                     jwtToken = null
+                    val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
+                    with(sharedPref.edit()) {
+                        remove("jwt_token")
+                        remove("jwt_exp")
+                        apply()
+                    }
                 } else if (response.isSuccessful) {
                     Log.d("CgmService", "Nightscout upload successful, marking ${timestampsToMark.size} entries as uploaded")
                     val writeDb = dbHelper.writableDatabase
