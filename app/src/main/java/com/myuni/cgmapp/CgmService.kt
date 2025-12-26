@@ -447,7 +447,7 @@ class CgmService : Service() {
             val currentTime = cal.timeInMillis
             val currentTimestamp = currentTime - (ageInMinutes * 60 * 1000)
 
-            // Fetch last 3 readings + current 1 = 4 points for regression (15 min window)
+            // Fetch last 3 readings + current 1 = 4 points for regression
             val readings = loadRecentCgmData(3).toMutableList()
             readings.add(0, Pair(glucoseVal, currentTimestamp))
             
