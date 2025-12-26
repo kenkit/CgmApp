@@ -8,10 +8,13 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
+import android.provider.Settings
 import android.appwidget.AppWidgetManager
 import android.content.ComponentName
 import android.graphics.Color
@@ -50,6 +53,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var selectedDeviceStatusTextView: TextView
     private var chartMode = 0 // 0 = 24h, 1 = 6h, 2 = History
     private var historyStart: Long = 0
+    private var currentRssi: Int = 0
     
     private val handler = Handler(Looper.getMainLooper())
     private var nextUploadTime: Long = 0
@@ -60,7 +64,7 @@ class MainActivity : AppCompatActivity() {
                 CgmService.ACTION_CGM_UPDATE -> {
                     val value = intent.getDoubleExtra(CgmService.EXTRA_CGM_VALUE, 0.0)
                     val age = intent.getIntExtra(CgmService.EXTRA_CGM_AGE, 0)
-                    val rssi = intent.getIntExtra(CgmService.EXTRA_RSSI, 0)
+                    currentRssi = intent.getIntExtra(CgmService.EXTRA_RSSI, 0)
                     cgmValueTextView.text = value.toString()
                     sampleAgeTextView.text = "Sample scanned:$age mins ago"
                     updateColors(value, arrowTextView.text.toString())
@@ -68,7 +72,7 @@ class MainActivity : AppCompatActivity() {
                     
                     val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
                     val deviceName = sharedPref.getString("selected_device_name", "Unknown")
-                    selectedDeviceStatusTextView.text = "Connected: $deviceName (RSSI: $rssi dBm)"
+                    selectedDeviceStatusTextView.text = "Connected: $deviceName (RSSI: $currentRssi dBm)"
                 }
                 CgmService.ACTION_ARROW_UPDATE -> {
                     val arrow = intent.getStringExtra(CgmService.EXTRA_ARROW_VALUE) ?: "→"
@@ -422,9 +426,30 @@ class MainActivity : AppCompatActivity() {
         val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
         val deviceName = sharedPref.getString("selected_device_name", null)
         if (deviceName != null) {
-            selectedDeviceStatusTextView.text = "Connected: $deviceName"
+            val rssiStr = if (currentRssi != 0) "$currentRssi dBm" else "-- dBm"
+            selectedDeviceStatusTextView.text = "Connected: $deviceName (RSSI: $rssiStr)"
         } else {
             selectedDeviceStatusTextView.text = "No Device Selected"
+        }
+
+        checkBatteryOptimizations()
+    }
+
+    private fun checkBatteryOptimizations() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
+                androidx.appcompat.app.AlertDialog.Builder(this)
+                    .setTitle("Battery Optimization")
+                    .setMessage("This app needs to run in the background to reliably collect and upload CGM data. Please disable battery optimization for this app in the next screen.")
+                    .setPositiveButton("Settings") { _, _ ->
+                        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                        intent.data = Uri.parse("package:$packageName")
+                        startActivity(intent)
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
         }
     }
 
