@@ -10,6 +10,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.database.sqlite.SQLiteDatabase
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -519,8 +520,27 @@ class CgmService : Service() {
         Log.d("CgmService", "CgmService onStartCommand - Attempting to start foreground")
         
         val notification = notificationService.getInitialNotification(dbHelper)
-        Log.d("CgmService", "Got initial notification, calling startForeground")
-        startForeground(PersistentNotificationService.NOTIFICATION_ID, notification)
+        
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    PersistentNotificationService.NOTIFICATION_ID, 
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+                )
+            } else {
+                startForeground(PersistentNotificationService.NOTIFICATION_ID, notification)
+            }
+            Log.d("CgmService", "startForeground successful")
+        } catch (e: Exception) {
+            Log.e("CgmService", "Failed to start foreground service", e)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && 
+                e is android.app.ForegroundServiceStartNotAllowedException) {
+                // We are not allowed to start foreground. Stop the service.
+                stopSelf()
+                return START_NOT_STICKY
+            }
+        }
 
         startPeriodicScan()
         startPeriodicNightscoutUpload()
