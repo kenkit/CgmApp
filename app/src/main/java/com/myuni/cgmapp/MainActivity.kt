@@ -65,7 +65,6 @@ class MainActivity : AppCompatActivity() {
                     sampleAgeTextView.text = "$age mins ago"
                     updateColors(value, arrowTextView.text.toString())
                     loadChartData() // Refresh chart
-                    loadPendingTable() // Refresh table
                     
                     val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
                     val deviceName = sharedPref.getString("selected_device_name", "Unknown")
@@ -318,13 +317,6 @@ class MainActivity : AppCompatActivity() {
 
         pendingTable.removeAllViews()
         
-        // Header
-        val headerRow = TableRow(this)
-        headerRow.addView(TextView(this).apply { text = "Time"; setPadding(16,16,16,16); setTypeface(null, android.graphics.Typeface.BOLD) })
-        headerRow.addView(TextView(this).apply { text = "Value"; setPadding(16,16,16,16); setTypeface(null, android.graphics.Typeface.BOLD) })
-        headerRow.setBackgroundColor(Color.LTGRAY)
-        pendingTable.addView(headerRow)
-
         val dbHelper = DatabaseHelper(this)
         val db = dbHelper.readableDatabase
         val cursor = db.query(
@@ -336,16 +328,37 @@ class MainActivity : AppCompatActivity() {
             "${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} DESC"
         )
 
-        val sdf = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
-        
-        while(cursor.moveToNext()) {
-            val ts = cursor.getLong(0)
-            val value = cursor.getDouble(1)
-            
+        if (cursor.count == 0) {
             val row = TableRow(this)
-            row.addView(TextView(this).apply { text = sdf.format(Date(ts)); setPadding(16,16,16,16) })
-            row.addView(TextView(this).apply { text = String.format("%.1f", value); setPadding(16,16,16,16) })
+            val emptyView = TextView(this).apply {
+                text = "No pending uploads"
+                setPadding(16, 16, 16, 16)
+                setTypeface(null, android.graphics.Typeface.ITALIC)
+                val params = TableRow.LayoutParams(0, TableRow.LayoutParams.WRAP_CONTENT, 1f)
+                params.span = 2
+                layoutParams = params
+            }
+            row.addView(emptyView)
             pendingTable.addView(row)
+        } else {
+            // Header
+            val headerRow = TableRow(this)
+            headerRow.addView(TextView(this).apply { text = "Time"; setPadding(16,16,16,16); setTypeface(null, android.graphics.Typeface.BOLD) })
+            headerRow.addView(TextView(this).apply { text = "Value"; setPadding(16,16,16,16); setTypeface(null, android.graphics.Typeface.BOLD) })
+            headerRow.setBackgroundColor(Color.LTGRAY)
+            pendingTable.addView(headerRow)
+
+            val sdf = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+            
+            while(cursor.moveToNext()) {
+                val ts = cursor.getLong(0)
+                val value = cursor.getDouble(1)
+                
+                val row = TableRow(this)
+                row.addView(TextView(this).apply { text = sdf.format(Date(ts)); setPadding(16,16,16,16) })
+                row.addView(TextView(this).apply { text = String.format("%.1f", value); setPadding(16,16,16,16) })
+                pendingTable.addView(row)
+            }
         }
         cursor.close()
     }

@@ -157,6 +157,7 @@ class CgmService : Service() {
         client.newCall(request).enqueue(object : okhttp3.Callback {
             override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
                 Log.e("CgmService", "Nightscout authorization failed", e)
+                broadcastUploadStatus()
             }
 
             override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
@@ -248,6 +249,7 @@ class CgmService : Service() {
         client.newCall(request).enqueue(object : okhttp3.Callback {
             override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
                 Log.e("CgmService", "Nightscout upload failed", e)
+                broadcastUploadStatus()
             }
 
             override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
@@ -302,7 +304,7 @@ class CgmService : Service() {
             val intervalMins = sharedPref.getInt("upload_interval", 5)
             val delayMillis = intervalMins * 60 * 1000L
             nextUploadTime = System.currentTimeMillis() + delayMillis
-            broadcastUploadStatus()
+            broadcastUploadStatus() // This ensures the countdown is updated
             handler.postDelayed(this, delayMillis)
         }
     }
@@ -441,8 +443,11 @@ class CgmService : Service() {
             val phase = data[11].toInt() and 0xFF
             val ageInMinutes = (data[3].toInt() and 0xFF) / 6
             
-            // Calculate timestamp based on age
-            val currentTime = Calendar.getInstance().timeInMillis
+            // Calculate timestamp based on age, truncating to the minute
+            val cal = Calendar.getInstance()
+            cal.set(Calendar.SECOND, 0)
+            cal.set(Calendar.MILLISECOND, 0)
+            val currentTime = cal.timeInMillis
             val currentTimestamp = currentTime - (ageInMinutes * 60 * 1000)
 
             // Fetch last 3 readings + current 1 = 4 points for regression (15 min window)
@@ -499,7 +504,7 @@ class CgmService : Service() {
             broadcastUploadStatus()
 
             // Trigger Nightscout upload
-            uploadToNightscout()
+            // uploadToNightscout() // Commented out to prevent immediate upload
 
         } else {
             Log.d("CgmService", "Nordic block too short for glucose data (${data.size} bytes)")
