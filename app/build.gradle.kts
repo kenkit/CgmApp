@@ -46,6 +46,7 @@ dependencies {
     implementation(libs.blessed.kotlin)
     implementation(libs.okhttp)
     implementation(libs.gson)
+    implementation(libs.mpandroidchart)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

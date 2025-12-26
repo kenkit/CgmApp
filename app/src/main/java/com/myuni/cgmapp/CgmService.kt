@@ -42,6 +42,8 @@ class CgmService : Service() {
         const val EXTRA_CGM_VALUE = "EXTRA_CGM_VALUE"
         const val EXTRA_ARROW_VALUE = "EXTRA_ARROW_VALUE"
         const val EXTRA_CGM_AGE = "EXTRA_CGM_AGE"
+        const val EXTRA_RSSI = "EXTRA_RSSI"
+        const val EXTRA_DEVICE_NAME = "EXTRA_DEVICE_NAME"
         const val EXTRA_PENDING_COUNT = "EXTRA_PENDING_COUNT"
         const val EXTRA_NEXT_UPLOAD_TIME = "EXTRA_NEXT_UPLOAD_TIME"
         // Scan for 3.25 seconds as requested
@@ -312,6 +314,14 @@ class CgmService : Service() {
 
     private val centralManagerCallback = object : BluetoothCentralManagerCallback() {
         override fun onDiscovered(peripheral: BluetoothPeripheral, scanResult: ScanResult) {
+            val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
+            val selectedMac = sharedPref.getString("selected_device_mac", "")
+
+            if (!selectedMac.isNullOrEmpty() && peripheral.address != selectedMac) {
+                // Log.d("CgmService", "Ignoring device ${peripheral.address} (Selected: $selectedMac)")
+                return
+            }
+
             Log.d("CgmService", "Discovered: ${peripheral.name} (${peripheral.address})")
 
             val record = scanResult.scanRecord
@@ -475,6 +485,7 @@ class CgmService : Service() {
             val intent = Intent(ACTION_CGM_UPDATE)
             intent.putExtra(EXTRA_CGM_VALUE, glucoseVal)
             intent.putExtra(EXTRA_CGM_AGE, ageInMinutes)
+            intent.putExtra(EXTRA_RSSI, rssi)
             intent.setPackage(packageName)
             sendBroadcast(intent)
 
@@ -565,6 +576,14 @@ class CgmService : Service() {
         if (isScanning) return
         if (!::centralManager.isInitialized) {
             Log.e("CgmService", "CentralManager not initialized, cannot scan")
+            return
+        }
+        
+        val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
+        val selectedMac = sharedPref.getString("selected_device_mac", null)
+        
+        if (selectedMac.isNullOrEmpty()) {
+            Log.d("CgmService", "No device selected, skipping scan.")
             return
         }
 

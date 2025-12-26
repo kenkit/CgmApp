@@ -12,10 +12,12 @@ constraintlayout = "2.1.4"
 blessedKotlin = "3.0.4"
 okhttp = "4.12.0"
 gson = "2.10.1"
+mpandroidchart = "v3.1.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 blessed-kotlin = { group = "com.github.weliem", name = "blessed-kotlin", version.ref = "blessedKotlin" }
+mpandroidchart = { group = "com.github.PhilJay", name = "MPAndroidChart", version.ref = "mpandroidchart" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }

@@ -7,6 +7,17 @@
     android:layout_height="match_parent"
     tools:context=".MainActivity">
 
+    <TextView
+        android:id="@+id/selected_device_status"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_alignParentTop="true"
+        android:layout_alignParentStart="true"
+        android:layout_margin="16dp"
+        android:text="No Device Selected"
+        android:textSize="14sp"
+        android:textColor="@android:color/darker_gray" />
+
     <ImageButton
         android:id="@+id/settings_button"
         android:layout_width="wrap_content"
@@ -16,70 +27,133 @@
         android:layout_margin="16dp"
         android:src="@drawable/ic_settings"
         android:background="?attr/selectableItemBackgroundBorderless"
-        android:contentDescription="Settings" />
+        android:contentDescription="Settings"
+        android:elevation="10dp"/>
 
-    <LinearLayout
+    <ScrollView
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:orientation="vertical"
-        android:gravity="center">
+        android:layout_height="match_parent">
 
         <LinearLayout
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical">
+            android:orientation="vertical"
+            android:gravity="center_horizontal"
+            android:paddingTop="60dp"
+            android:paddingBottom="16dp">
 
-            <TextView
-                android:id="@+id/cgmvalue"
+            <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="00"
-                android:textStyle="bold"
-                android:textSize="60sp" />
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:id="@+id/cgmvalue"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="00"
+                    android:textStyle="bold"
+                    android:textSize="60sp" />
+
+                <TextView
+                    android:id="@+id/mmoltext"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="mmol"
+                    android:textStyle="bold"
+                    android:textSize="40sp"
+                    android:layout_marginStart="8dp"/>
+
+                <TextView
+                    android:id="@+id/arrow"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="→"
+                    android:textStyle="bold"
+                    android:textSize="40sp"
+                    android:layout_marginStart="8dp"/>
+            </LinearLayout>
 
             <TextView
-                android:id="@+id/mmoltext"
+                android:id="@+id/sample_age"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="mmol"
-                android:textStyle="bold"
-                android:textSize="40sp"
-                android:layout_marginStart="8dp"/>
+                android:text="-- mins ago"
+                android:textSize="16sp"
+                android:layout_marginTop="8dp"/>
 
             <TextView
-                android:id="@+id/arrow"
+                android:id="@+id/pending_samples"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="→"
+                android:text="Pending: 0"
+                android:textSize="14sp"
+                android:layout_marginTop="4dp"/>
+
+            <TextView
+                android:id="@+id/next_upload"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Next upload: --:--"
+                android:textSize="14sp"
+                android:layout_marginTop="4dp"/>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center"
+                android:layout_marginTop="16dp"
+                android:layout_marginBottom="8dp">
+
+                <Button
+                    android:id="@+id/btn_last_6h"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="6h"
+                    android:layout_marginEnd="8dp"
+                    style="@style/Widget.MaterialComponents.Button.OutlinedButton"/>
+
+                <Button
+                    android:id="@+id/btn_last_24h"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="24h"
+                    android:layout_marginEnd="8dp"
+                    style="@style/Widget.MaterialComponents.Button.OutlinedButton"/>
+
+                <Button
+                    android:id="@+id/btn_history"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="History"
+                    style="@style/Widget.MaterialComponents.Button.OutlinedButton"/>
+            </LinearLayout>
+
+            <com.github.mikephil.charting.charts.LineChart
+                android:id="@+id/chart"
+                android:layout_width="match_parent"
+                android:layout_height="300dp"
+                android:layout_margin="16dp"/>
+
+            <TextView
+                android:id="@+id/pending_uploads_title"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Pending Uploads"
+                android:textSize="18sp"
                 android:textStyle="bold"
-                android:textSize="40sp"
-                android:layout_marginStart="8dp"/>
+                android:layout_marginTop="16dp"/>
+
+            <TableLayout
+                android:id="@+id/pending_table"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:stretchColumns="1"
+                android:padding="16dp">
+            </TableLayout>
+
         </LinearLayout>
-
-        <TextView
-            android:id="@+id/sample_age"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="-- mins ago"
-            android:textSize="16sp"
-            android:layout_marginTop="8dp"/>
-
-        <TextView
-            android:id="@+id/pending_samples"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Pending: 0"
-            android:textSize="14sp"
-            android:layout_marginTop="4dp"/>
-
-        <TextView
-            android:id="@+id/next_upload"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Next upload: --:--"
-            android:textSize="14sp"
-            android:layout_marginTop="4dp"/>
-
-    </LinearLayout>
+    </ScrollView>
 </RelativeLayout>
