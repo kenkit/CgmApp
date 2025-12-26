@@ -146,13 +146,18 @@
                 android:textStyle="bold"
                 android:layout_marginTop="16dp"/>
 
-            <TableLayout
-                android:id="@+id/pending_table"
+            <ScrollView
+                android:id="@+id/pending_uploads_container"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:stretchColumns="1"
-                android:padding="16dp">
-            </TableLayout>
+                android:layout_height="wrap_content">
+                <TableLayout
+                    android:id="@+id/pending_table"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:stretchColumns="1"
+                    android:padding="16dp">
+                </TableLayout>
+            </ScrollView>
 
         </LinearLayout>
     </ScrollView>

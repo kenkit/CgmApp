@@ -45,7 +45,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var pendingSamplesTextView: TextView
     private lateinit var nextUploadTextView: TextView
     private lateinit var chart: LineChart
-    private lateinit var pendingTable: TableLayout
+    private lateinit var pendingUploadsContainer: android.widget.ScrollView
     private lateinit var pendingUploadsTitleTextView: TextView
     private lateinit var selectedDeviceStatusTextView: TextView
     private var chartMode = 0 // 0 = 24h, 1 = 6h, 2 = History
@@ -152,7 +152,7 @@ class MainActivity : AppCompatActivity() {
         pendingSamplesTextView = findViewById(R.id.pending_samples)
         nextUploadTextView = findViewById(R.id.next_upload)
         chart = findViewById(R.id.chart)
-        pendingTable = findViewById(R.id.pending_table)
+        pendingUploadsContainer = findViewById(R.id.pending_uploads_container)
         pendingUploadsTitleTextView = findViewById(R.id.pending_uploads_title)
         selectedDeviceStatusTextView = findViewById(R.id.selected_device_status)
         
@@ -304,17 +304,18 @@ class MainActivity : AppCompatActivity() {
         val isUploadEnabled = sharedPref.getBoolean("enable_upload", false)
         
         if (!isUploadEnabled) {
-            pendingTable.visibility = android.view.View.GONE
+            pendingUploadsContainer.visibility = android.view.View.GONE
             pendingUploadsTitleTextView.visibility = android.view.View.GONE
             pendingSamplesTextView.visibility = android.view.View.GONE
             nextUploadTextView.visibility = android.view.View.GONE
             return
         }
-        pendingTable.visibility = android.view.View.VISIBLE
+        pendingUploadsContainer.visibility = android.view.View.VISIBLE
         pendingUploadsTitleTextView.visibility = android.view.View.VISIBLE
         pendingSamplesTextView.visibility = android.view.View.VISIBLE
         nextUploadTextView.visibility = android.view.View.VISIBLE
 
+        val pendingTable = findViewById<TableLayout>(R.id.pending_table)
         pendingTable.removeAllViews()
         
         val dbHelper = DatabaseHelper(this)
@@ -329,17 +330,13 @@ class MainActivity : AppCompatActivity() {
         )
 
         if (cursor.count == 0) {
-            val row = TableRow(this)
             val emptyView = TextView(this).apply {
                 text = "No pending uploads"
                 setPadding(16, 16, 16, 16)
+                setTextColor(Color.GRAY)
                 setTypeface(null, android.graphics.Typeface.ITALIC)
-                val params = TableRow.LayoutParams(0, TableRow.LayoutParams.WRAP_CONTENT, 1f)
-                params.span = 2
-                layoutParams = params
             }
-            row.addView(emptyView)
-            pendingTable.addView(row)
+            pendingTable.addView(emptyView)
         } else {
             // Header
             val headerRow = TableRow(this)

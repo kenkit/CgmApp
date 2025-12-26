@@ -39,19 +39,56 @@
             android:inputType="textPassword" />
     </com.google.android.material.textfield.TextInputLayout>
 
-    <com.google.android.material.textfield.TextInputLayout
+    <TextView
+        android:id="@+id/upload_interval_label"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:hint="Upload Interval (minutes)"
-        android:layout_marginBottom="16dp">
+        android:text="Upload Interval: 5 minutes"
+        android:layout_marginTop="8dp"/>
 
-        <com.google.android.material.textfield.TextInputEditText
-            android:id="@+id/upload_interval"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:inputType="number"
-            android:text="5" />
-    </com.google.android.material.textfield.TextInputLayout>
+    <com.google.android.material.slider.Slider
+        android:id="@+id/upload_interval_slider"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:valueFrom="5.0"
+        android:valueTo="60.0"
+        android:stepSize="5.0"
+        android:value="5.0"
+        android:layout_marginBottom="16dp"/>
+
+    <TextView
+        android:id="@+id/scan_duration_label"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Scan Duration: 5 seconds"
+        android:layout_marginTop="8dp"/>
+
+    <com.google.android.material.slider.Slider
+        android:id="@+id/scan_duration_slider"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:valueFrom="1.0"
+        android:valueTo="15.0"
+        android:stepSize="1.0"
+        android:value="5.0"
+        android:layout_marginBottom="16dp"/>
+
+    <TextView
+        android:id="@+id/scan_interval_label"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Scan Interval: 1 minute"
+        android:layout_marginTop="8dp"/>
+
+    <com.google.android.material.slider.Slider
+        android:id="@+id/scan_interval_slider"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:valueFrom="1.0"
+        android:valueTo="5.0"
+        android:stepSize="1.0"
+        android:value="1.0"
+        android:layout_marginBottom="16dp"/>
 
     <com.google.android.material.switchmaterial.SwitchMaterial
         android:id="@+id/enable_upload"
@@ -73,11 +110,5 @@
         android:layout_height="wrap_content"
         android:text="Select Device"
         android:layout_marginBottom="24dp" />
-
-    <Button
-        android:id="@+id/save_settings"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Save Settings" />
 
 </LinearLayout>

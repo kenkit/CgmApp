@@ -46,9 +46,6 @@ class CgmService : Service() {
         const val EXTRA_DEVICE_NAME = "EXTRA_DEVICE_NAME"
         const val EXTRA_PENDING_COUNT = "EXTRA_PENDING_COUNT"
         const val EXTRA_NEXT_UPLOAD_TIME = "EXTRA_NEXT_UPLOAD_TIME"
-        // Scan for 3.25 seconds as requested
-        private const val SCAN_DURATION: Long = 5000
-        private const val SCAN_INTERVAL: Long = 60 * 1000 // 5 minutes
     }
 
     private lateinit var centralManager: BluetoothCentralManager
@@ -567,8 +564,10 @@ class CgmService : Service() {
     private val scanRunnable = object : Runnable {
         override fun run() {
             startScan()
+            val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
+            val scanIntervalMins = sharedPref.getInt("scan_interval", 1)
             // Schedule next scan after INTERVAL
-            handler.postDelayed(this, SCAN_INTERVAL)
+            handler.postDelayed(this, scanIntervalMins * 60 * 1000L)
         }
     }
 
@@ -594,8 +593,9 @@ class CgmService : Service() {
 
         Log.d("CgmService", "Starting scan cycle...")
         try {
+            val scanDuration = sharedPref.getInt("scan_duration", 5) * 1000L
             // Acquire wake lock to ensure CPU doesn't sleep during scan
-            wakeLock?.acquire(SCAN_DURATION + 1000)
+            wakeLock?.acquire(scanDuration + 1000)
 
             // Scan for peripherals with our specific Service UUID
             centralManager.scanForPeripheralsWithServices(listOf(SERVICE_UUID))
@@ -604,7 +604,7 @@ class CgmService : Service() {
             // Stop scanning after SCAN_DURATION
             handler.postDelayed({
                 stopScan()
-            }, SCAN_DURATION)
+            }, scanDuration)
         } catch (e: Exception) {
             Log.e("CgmService", "Error starting scan", e)
             if (wakeLock?.isHeld == true) wakeLock?.release()
