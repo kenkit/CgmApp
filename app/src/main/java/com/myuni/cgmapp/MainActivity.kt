@@ -62,7 +62,7 @@ class MainActivity : AppCompatActivity() {
                     val age = intent.getIntExtra(CgmService.EXTRA_CGM_AGE, 0)
                     val rssi = intent.getIntExtra(CgmService.EXTRA_RSSI, 0)
                     cgmValueTextView.text = value.toString()
-                    sampleAgeTextView.text = "$age mins ago"
+                    sampleAgeTextView.text = "Sample scanned:$age mins ago"
                     updateColors(value, arrowTextView.text.toString())
                     loadChartData() // Refresh chart
                     
