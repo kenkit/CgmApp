@@ -5,14 +5,97 @@ import android.content.Intent
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
+import android.util.Log
+import android.view.View
 import android.widget.Button
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.PermissionController
+import androidx.lifecycle.lifecycleScope
 import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.slider.Slider
+import kotlinx.coroutines.launch
 
 class SettingsActivity : AppCompatActivity() {
+
+    private val healthConnectManager by lazy { HealthConnectManager(this) }
+
+    private val requestPermissionActivityContract = PermissionController.createRequestPermissionResultContract()
+
+    private val requestPermissions = registerForActivityResult(requestPermissionActivityContract) { granted ->
+        if (granted.containsAll(healthConnectManager.getWritePermissions())) {
+            Log.d("SettingsActivity", "Health Connect permissions granted")
+            findViewById<Button>(R.id.grant_health_permissions).visibility = View.GONE
+            Toast.makeText(this, "Permissions granted!", Toast.LENGTH_SHORT).show()
+        } else {
+            Log.w("SettingsActivity", "Health Connect permissions denied")
+            Toast.makeText(this, "Permissions denied. Please try 'Open Settings' if the dialog didn't appear.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun checkAndRequestHealthConnectPermissions() {
+        val status = healthConnectManager.getStatus()
+        if (status != HealthConnectClient.SDK_AVAILABLE) {
+            val message = when (status) {
+                HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED -> "Health Connect needs an update"
+                HealthConnectClient.SDK_UNAVAILABLE -> "Health Connect is not available"
+                else -> "Health Connect status unknown: $status"
+            }
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+            return
+        }
+        
+        lifecycleScope.launch {
+            try {
+                if (!healthConnectManager.hasWritePermission()) {
+                    requestPermissions.launch(healthConnectManager.getWritePermissions())
+                } else {
+                    findViewById<Button>(R.id.grant_health_permissions).visibility = View.GONE
+                    Toast.makeText(this@SettingsActivity, "Permissions already granted", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                Log.e("SettingsActivity", "Error requesting Health Connect permissions", e)
+                Toast.makeText(this@SettingsActivity, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun openHealthConnectSettings() {
+        try {
+            val intent = Intent(HealthConnectClient.ACTION_HEALTH_CONNECT_SETTINGS)
+            startActivity(intent)
+        } catch (e: Exception) {
+            Log.e("SettingsActivity", "Could not open Health Connect settings", e)
+            Toast.makeText(this, "Could not open Health Connect settings", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun updateGrantButtonVisibility(isEnabled: Boolean) {
+        val grantButton = findViewById<Button>(R.id.grant_health_permissions)
+        val settingsButton = findViewById<Button>(R.id.open_health_settings)
+        
+        if (isEnabled) {
+            settingsButton.visibility = View.VISIBLE
+            val status = healthConnectManager.getStatus()
+            if (status == HealthConnectClient.SDK_AVAILABLE) {
+                lifecycleScope.launch {
+                    if (!healthConnectManager.hasWritePermission()) {
+                        grantButton.visibility = View.VISIBLE
+                    } else {
+                        grantButton.visibility = View.GONE
+                    }
+                }
+            } else {
+                grantButton.visibility = View.VISIBLE
+            }
+        } else {
+            grantButton.visibility = View.GONE
+            settingsButton.visibility = View.GONE
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -31,6 +114,9 @@ class SettingsActivity : AppCompatActivity() {
         val scanIntervalSlider = findViewById<Slider>(R.id.scan_interval_slider)
         
         val uploadSwitch = findViewById<SwitchMaterial>(R.id.enable_upload)
+        val healthConnectSwitch = findViewById<SwitchMaterial>(R.id.enable_health_connect)
+        val grantButton = findViewById<Button>(R.id.grant_health_permissions)
+        val settingsButton = findViewById<Button>(R.id.open_health_settings)
         val selectDeviceButton = findViewById<Button>(R.id.select_device_button)
 
         val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
@@ -51,7 +137,11 @@ class SettingsActivity : AppCompatActivity() {
         scanIntervalSlider.value = savedScanInterval.toFloat().coerceIn(scanIntervalSlider.valueFrom, scanIntervalSlider.valueTo)
         scanIntervalLabel.text = "Scan Interval: $savedScanInterval minutes"
         
-uploadSwitch.isChecked = sharedPref.getBoolean("enable_upload", false)
+        val healthEnabled = sharedPref.getBoolean("enable_health_connect", false)
+        uploadSwitch.isChecked = sharedPref.getBoolean("enable_upload", false)
+        healthConnectSwitch.isChecked = healthEnabled
+        
+        updateGrantButtonVisibility(healthEnabled)
 
         // Helper to save current state
         fun saveSettings() {
@@ -62,6 +152,7 @@ uploadSwitch.isChecked = sharedPref.getBoolean("enable_upload", false)
                 putInt("scan_duration", scanDurationSlider.value.toInt())
                 putInt("scan_interval", scanIntervalSlider.value.toInt())
                 putBoolean("enable_upload", uploadSwitch.isChecked)
+                putBoolean("enable_health_connect", healthConnectSwitch.isChecked)
                 apply()
             }
         }
@@ -93,9 +184,25 @@ uploadSwitch.isChecked = sharedPref.getBoolean("enable_upload", false)
             saveSettings()
         }
 
-        // Switch listener for auto-save
+        // Switch listeners for auto-save
         uploadSwitch.setOnCheckedChangeListener { _, _ ->
             saveSettings()
+        }
+
+        healthConnectSwitch.setOnCheckedChangeListener { _, isChecked ->
+            saveSettings()
+            updateGrantButtonVisibility(isChecked)
+            if (isChecked) {
+                checkAndRequestHealthConnectPermissions()
+            }
+        }
+
+        grantButton.setOnClickListener {
+            checkAndRequestHealthConnectPermissions()
+        }
+
+        settingsButton.setOnClickListener {
+            openHealthConnectSettings()
         }
 
         selectDeviceButton.setOnClickListener {
@@ -115,5 +222,8 @@ uploadSwitch.isChecked = sharedPref.getBoolean("enable_upload", false)
         } else {
             textView.text = "Selected Device Serial: $selectedName\n($selectedMac)"
         }
+        
+        val healthEnabled = sharedPref.getBoolean("enable_health_connect", false)
+        updateGrantButtonVisibility(healthEnabled)
     }
 }

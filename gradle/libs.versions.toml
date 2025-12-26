@@ -13,9 +13,13 @@ blessedKotlin = "3.0.4"
 okhttp = "4.12.0"
 gson = "2.10.1"
 mpandroidchart = "v3.1.0"
+health-connect = "1.1.0-alpha11"
+lifecycle-runtime-ktx = "2.8.7"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-health-connect = { group = "androidx.health.connect", name = "connect-client", version.ref = "health-connect" }
+androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle-runtime-ktx" }
 blessed-kotlin = { group = "com.github.weliem", name = "blessed-kotlin", version.ref = "blessedKotlin" }
 mpandroidchart = { group = "com.github.PhilJay", name = "MPAndroidChart", version.ref = "mpandroidchart" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }

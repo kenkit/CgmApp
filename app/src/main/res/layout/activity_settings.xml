@@ -97,6 +97,31 @@
         android:text="Enable Nightscout Upload"
         android:layout_marginBottom="16dp"/>
 
+    <com.google.android.material.switchmaterial.SwitchMaterial
+        android:id="@+id/enable_health_connect"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Enable Google Health Connect Sync"
+        android:layout_marginBottom="8dp"/>
+
+    <Button
+        android:id="@+id/grant_health_permissions"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Grant Health Connect Permissions"
+        android:layout_marginBottom="8dp"
+        android:visibility="gone"
+        style="@style/Widget.MaterialComponents.Button.TextButton"/>
+
+    <Button
+        android:id="@+id/open_health_settings"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Open Health Connect Settings"
+        android:layout_marginBottom="16dp"
+        android:visibility="gone"
+        style="@style/Widget.MaterialComponents.Button.TextButton"/>
+
     <TextView
         android:id="@+id/selected_device_text"
         android:layout_width="match_parent"

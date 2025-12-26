@@ -21,6 +21,10 @@ import androidx.core.app.NotificationCompat
 import com.welie.blessed.BluetoothCentralManager
 import com.welie.blessed.BluetoothCentralManagerCallback
 import com.welie.blessed.BluetoothPeripheral
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -50,6 +54,8 @@ class CgmService : Service() {
 
     private lateinit var centralManager: BluetoothCentralManager
     private val handler = Handler(Looper.getMainLooper())
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private lateinit var healthConnectManager: HealthConnectManager
     private var isScanning = false
     private var last_cgm_value = 0.0
     private var wakeLock: PowerManager.WakeLock? = null
@@ -195,13 +201,15 @@ class CgmService : Service() {
         val token = jwtToken ?: return
         
         val db = dbHelper.readableDatabase
+        // Limit batch size to 50 to prevent huge JSON payloads and long processing times
         val cursor = db.query(
             GlucoseContract.GlucoseEntry.TABLE_NAME,
             null,
             "${GlucoseContract.GlucoseEntry.COLUMN_NAME_UPLOADED} = 0",
             null,
             null, null,
-            "${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} ASC"
+            "${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} ASC",
+            "50"
         )
 
         val entries = mutableListOf<NightscoutEntry>()
@@ -280,8 +288,14 @@ class CgmService : Service() {
                         } finally {
                             writeDb.endTransaction()
                         }
-                        // Update UI with new pending count (should be 0 or close to it)
-                        broadcastUploadStatus()
+                        
+                        // Check if there's more to upload immediately
+                        val pendingCount = getPendingCount()
+                        if (pendingCount > 0) {
+                            performUpload(url)
+                        } else {
+                            broadcastUploadStatus()
+                        }
                     } else {
                         Log.e("CgmService", "Nightscout upload failed with code: ${response.code} ${response.message}")
                     }
@@ -294,9 +308,79 @@ class CgmService : Service() {
         })
     }
 
+    private fun syncToHealthConnect() {
+        val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
+        if (!sharedPref.getBoolean("enable_health_connect", false)) return
+        if (!healthConnectManager.isAvailable()) return
+
+        serviceScope.launch {
+            val db = dbHelper.readableDatabase
+            val cursor = db.query(
+                GlucoseContract.GlucoseEntry.TABLE_NAME,
+                arrayOf(GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP, GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE),
+                "${GlucoseContract.GlucoseEntry.COLUMN_NAME_HEALTH_SYNCED} = 0",
+                null,
+                null, null,
+                "${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} ASC",
+                "50"
+            )
+
+            val records = mutableListOf<Pair<Long, Double>>()
+            val timestampsToMark = mutableListOf<Long>()
+
+            while (cursor.moveToNext()) {
+                val ts = cursor.getLong(0)
+                val value = cursor.getDouble(1)
+                records.add(Pair(ts, value))
+                timestampsToMark.add(ts)
+            }
+            cursor.close()
+
+            if (records.isEmpty()) return@launch
+
+            try {
+                healthConnectManager.writeBloodGlucoseBatch(records)
+                
+                // Mark as synced in DB
+                val writeDb = dbHelper.writableDatabase
+                writeDb.beginTransaction()
+                try {
+                    val values = ContentValues().apply {
+                        put(GlucoseContract.GlucoseEntry.COLUMN_NAME_HEALTH_SYNCED, 1)
+                    }
+                    for (ts in timestampsToMark) {
+                        writeDb.update(
+                            GlucoseContract.GlucoseEntry.TABLE_NAME,
+                            values,
+                            "${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} = ?",
+                            arrayOf(ts.toString())
+                        )
+                    }
+                    writeDb.setTransactionSuccessful()
+                } finally {
+                    writeDb.endTransaction()
+                }
+                
+                // Recurse if there's more
+                if (records.size == 50) {
+                    syncToHealthConnect()
+                }
+            } catch (e: Exception) {
+                Log.e("CgmService", "Error syncing to Health Connect", e)
+            }
+        }
+    }
+
     private val nightscoutRunnable = object : Runnable {
         override fun run() {
             uploadToNightscout()
+            syncToHealthConnect()
+            
+            // Clean up old records once a day (approx)
+            if (System.currentTimeMillis() % (24 * 60 * 60 * 1000) < (5 * 60 * 1000)) {
+                dbHelper.cleanupOldRecords()
+            }
+
             val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
             val intervalMins = sharedPref.getInt("upload_interval", 5)
             val delayMillis = intervalMins * 60 * 1000L
@@ -483,6 +567,9 @@ class CgmService : Service() {
             // Update Widget
             CgmWidget.updateWidget(this, glucoseVal, arrow, ageInMinutes)
 
+            // Sync to Health Connect
+            syncToHealthConnect()
+
             // Broadcast the value
             val intent = Intent(ACTION_CGM_UPDATE)
             intent.putExtra(EXTRA_CGM_VALUE, glucoseVal)
@@ -513,6 +600,7 @@ class CgmService : Service() {
         Log.d("CgmService", "CgmService onCreate")
         notificationService = PersistentNotificationService(this)
         dbHelper = DatabaseHelper(this)
+        healthConnectManager = HealthConnectManager(this)
         
         val lastData = loadRecentCgmData(1)
         last_cgm_value = if (lastData.isNotEmpty()) lastData[0].first else 0.0

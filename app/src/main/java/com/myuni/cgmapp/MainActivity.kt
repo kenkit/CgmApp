@@ -18,6 +18,7 @@ import android.provider.Settings
 import android.appwidget.AppWidgetManager
 import android.content.ComponentName
 import android.graphics.Color
+import android.util.Log
 import android.widget.TableLayout
 import android.widget.TableRow
 import android.widget.TextView
@@ -29,6 +30,11 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.health.connect.client.PermissionController
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Locale
 import com.github.mikephil.charting.charts.LineChart
 import com.github.mikephil.charting.data.Entry
@@ -51,12 +57,48 @@ class MainActivity : AppCompatActivity() {
     private lateinit var pendingUploadsContainer: android.widget.ScrollView
     private lateinit var pendingUploadsTitleTextView: TextView
     private lateinit var selectedDeviceStatusTextView: TextView
+    private lateinit var dbHelper: DatabaseHelper
     private var chartMode = 0 // 0 = 24h, 1 = 6h, 2 = History
     private var historyStart: Long = 0
     private var currentRssi: Int = 0
     
     private val handler = Handler(Looper.getMainLooper())
     private var nextUploadTime: Long = 0
+
+    private val healthConnectManager by lazy { HealthConnectManager(this) }
+    private var healthConnectPermissionRequested = false
+
+    private val requestPermissionActivityContract = PermissionController.createRequestPermissionResultContract()
+
+    private val requestPermissions = registerForActivityResult(requestPermissionActivityContract) { granted ->
+        if (granted.containsAll(healthConnectManager.getWritePermissions())) {
+            Log.d("MainActivity", "Health Connect permissions granted")
+        } else {
+            Log.w("MainActivity", "Health Connect permissions denied")
+        }
+    }
+
+    private fun checkHealthConnectPermissions() {
+        if (healthConnectPermissionRequested) return
+        
+        val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
+        if (!sharedPref.getBoolean("enable_google_fit", false)) return
+        if (!healthConnectManager.isAvailable()) {
+            Log.w("MainActivity", "Health Connect not available")
+            return
+        }
+
+        lifecycleScope.launch {
+            try {
+                if (!healthConnectManager.hasWritePermission()) {
+                    healthConnectPermissionRequested = true
+                    requestPermissions.launch(healthConnectManager.getWritePermissions())
+                }
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Error checking Health Connect permissions", e)
+            }
+        }
+    }
 
     private val cgmReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -72,7 +114,8 @@ class MainActivity : AppCompatActivity() {
                     
                     val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
                     val deviceName = sharedPref.getString("selected_device_name", "Unknown")
-                    selectedDeviceStatusTextView.text = "Connected: $deviceName (RSSI: $currentRssi dBm)"
+                    val rssiStr = if (currentRssi != 0) "$currentRssi dBm" else "-- dBm"
+                    selectedDeviceStatusTextView.text = "Connected: $deviceName (RSSI: $rssiStr)"
                 }
                 CgmService.ACTION_ARROW_UPDATE -> {
                     val arrow = intent.getStringExtra(CgmService.EXTRA_ARROW_VALUE) ?: "→"
@@ -150,6 +193,8 @@ class MainActivity : AppCompatActivity() {
             insets
         }
 
+        dbHelper = DatabaseHelper(this)
+
         cgmValueTextView = findViewById(R.id.cgmvalue)
         arrowTextView = findViewById(R.id.arrow)
         sampleAgeTextView = findViewById(R.id.sample_age)
@@ -196,8 +241,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         loadLastValueFromDb()
-        loadChartData()
-        loadPendingTable()
         
         // Start service if widget is present
         val appWidgetManager = AppWidgetManager.getInstance(this)
@@ -213,94 +256,96 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadChartData() {
-        val dbHelper = DatabaseHelper(this)
-        val db = dbHelper.readableDatabase
-        
-        var startTime: Long = 0
-        var endTime: Long = System.currentTimeMillis()
-        
-        if (chartMode == 0) {
-            // Last 24 hours
-            startTime = System.currentTimeMillis() - (24 * 60 * 60 * 1000)
-        } else if (chartMode == 1) {
-            // Last 6 hours
-            startTime = System.currentTimeMillis() - (6 * 60 * 60 * 1000)
-        } else {
-            // History
-            startTime = historyStart
-            endTime = historyStart + (24 * 60 * 60 * 1000)
-        }
-        
-        val selection: String
-        val selectionArgs: Array<String>
-        
-        if (chartMode == 2) {
-             selection = "${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} >= ? AND ${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} < ?"
-             selectionArgs = arrayOf(startTime.toString(), endTime.toString())
-        } else {
-             selection = "${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} > ?"
-             selectionArgs = arrayOf(startTime.toString())
-        }
-        
-        val cursor = db.query(
-            GlucoseContract.GlucoseEntry.TABLE_NAME,
-            arrayOf(GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP, GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE),
-            selection,
-            selectionArgs,
-            null, null,
-            "${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} ASC"
-        )
-
-        val entries = ArrayList<Entry>()
-        val colors = ArrayList<Int>()
-        
-        while(cursor.moveToNext()) {
-            val ts = cursor.getLong(0)
-            val value = cursor.getDouble(1)
-            entries.add(Entry(ts.toFloat(), value.toFloat()))
+        lifecycleScope.launch(Dispatchers.IO) {
+            val db = dbHelper.readableDatabase
             
-            // Color coding
-            if (value <= 3.9) {
-                colors.add(Color.RED)
-            } else if (value >= 10.0) {
-                colors.add(Color.parseColor("#FFA500")) // Orange
+            var startTime: Long = 0
+            var endTime: Long = System.currentTimeMillis()
+            
+            if (chartMode == 0) {
+                // Last 24 hours
+                startTime = System.currentTimeMillis() - (24 * 60 * 60 * 1000)
+            } else if (chartMode == 1) {
+                // Last 6 hours
+                startTime = System.currentTimeMillis() - (6 * 60 * 60 * 1000)
             } else {
-                colors.add(Color.parseColor("#008000")) // Green
+                // History
+                startTime = historyStart
+                endTime = historyStart + (24 * 60 * 60 * 1000)
+            }
+            
+            val selection: String
+            val selectionArgs: Array<String>
+            
+            if (chartMode == 2) {
+                 selection = "${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} >= ? AND ${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} < ?"
+                 selectionArgs = arrayOf(startTime.toString(), endTime.toString())
+            } else {
+                 selection = "${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} > ?"
+                 selectionArgs = arrayOf(startTime.toString())
+            }
+            
+            val cursor = db.query(
+                GlucoseContract.GlucoseEntry.TABLE_NAME,
+                arrayOf(GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP, GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE),
+                selection,
+                selectionArgs,
+                null, null,
+                "${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} ASC"
+            )
+
+            val entries = ArrayList<Entry>()
+            val colors = ArrayList<Int>()
+            
+            while(cursor.moveToNext()) {
+                val ts = cursor.getLong(0)
+                val value = cursor.getDouble(1)
+                entries.add(Entry(ts.toFloat(), value.toFloat()))
+                
+                // Color coding
+                if (value <= 3.9) {
+                    colors.add(Color.RED)
+                } else if (value >= 10.0) {
+                    colors.add(Color.parseColor("#FFA500")) // Orange
+                } else {
+                    colors.add(Color.parseColor("#008000")) // Green
+                }
+            }
+            cursor.close()
+
+            withContext(Dispatchers.Main) {
+                if (entries.isEmpty()) {
+                    chart.clear()
+                } else {
+                    chart.visibility = android.view.View.VISIBLE
+
+                    val dataSet = LineDataSet(entries, "Glucose (mmol/L)")
+                    dataSet.color = Color.BLUE
+                    dataSet.setCircleColors(colors) // Set the list of colors for circles
+                    dataSet.lineWidth = 2f
+                    dataSet.circleRadius = 4f
+                    dataSet.setDrawValues(false)
+                    dataSet.mode = LineDataSet.Mode.CUBIC_BEZIER
+
+                    val lineData = LineData(dataSet)
+                    chart.data = lineData
+                    
+                    // Format X Axis
+                    val xAxis = chart.xAxis
+                    xAxis.position = XAxis.XAxisPosition.BOTTOM
+                    xAxis.valueFormatter = object : ValueFormatter() {
+                        private val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
+                        override fun getFormattedValue(value: Float): String {
+                            return sdf.format(Date(value.toLong()))
+                        }
+                    }
+                    
+                    chart.description.isEnabled = false
+                    chart.axisRight.isEnabled = false
+                    chart.invalidate()
+                }
             }
         }
-        cursor.close()
-
-        if (entries.isEmpty()) {
-            chart.clear()
-            return
-        }
-        
-        chart.visibility = android.view.View.VISIBLE
-
-        val dataSet = LineDataSet(entries, "Glucose (mmol/L)")
-        dataSet.color = Color.BLUE
-        dataSet.setCircleColors(colors) // Set the list of colors for circles
-        dataSet.lineWidth = 2f
-        dataSet.circleRadius = 4f
-        dataSet.setDrawValues(false)
-        dataSet.mode = LineDataSet.Mode.CUBIC_BEZIER
-
-        val lineData = LineData(dataSet)
-        chart.data = lineData
-        
-        // Format X Axis
-        val xAxis = chart.xAxis
-        xAxis.position = XAxis.XAxisPosition.BOTTOM
-        xAxis.valueFormatter = object : ValueFormatter() {
-            private val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
-            override fun getFormattedValue(value: Float): String {
-                return sdf.format(Date(value.toLong()))
-            }
-        }
-        
-        chart.description.isEnabled = false
-        chart.axisRight.isEnabled = false
-        chart.invalidate()
     }
 
     private fun loadPendingTable() {
@@ -319,96 +364,113 @@ class MainActivity : AppCompatActivity() {
         pendingSamplesTextView.visibility = android.view.View.VISIBLE
         nextUploadTextView.visibility = android.view.View.VISIBLE
 
-        val pendingTable = findViewById<TableLayout>(R.id.pending_table)
-        pendingTable.removeAllViews()
-        
-        val dbHelper = DatabaseHelper(this)
-        val db = dbHelper.readableDatabase
-        val cursor = db.query(
-            GlucoseContract.GlucoseEntry.TABLE_NAME,
-            arrayOf(GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP, GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE),
-            "${GlucoseContract.GlucoseEntry.COLUMN_NAME_UPLOADED} = 0",
-            null,
-            null, null,
-            "${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} DESC"
-        )
+        lifecycleScope.launch(Dispatchers.IO) {
+            val db = dbHelper.readableDatabase
+            val cursor = db.query(
+                GlucoseContract.GlucoseEntry.TABLE_NAME,
+                arrayOf(GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP, GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE),
+                "${GlucoseContract.GlucoseEntry.COLUMN_NAME_UPLOADED} = 0",
+                null,
+                null, null,
+                "${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} DESC",
+                "50" // Limit to 50
+            )
 
-        if (cursor.count == 0) {
-            val emptyView = TextView(this).apply {
-                text = "No pending uploads"
-                setPadding(16, 16, 16, 16)
-                setTextColor(Color.GRAY)
-                setTypeface(null, android.graphics.Typeface.ITALIC)
-            }
-            pendingTable.addView(emptyView)
-        } else {
-            // Header
-            val headerRow = TableRow(this)
-            headerRow.addView(TextView(this).apply { text = "Time"; setPadding(16,16,16,16); setTypeface(null, android.graphics.Typeface.BOLD) })
-            headerRow.addView(TextView(this).apply { text = "Value"; setPadding(16,16,16,16); setTypeface(null, android.graphics.Typeface.BOLD) })
-            headerRow.setBackgroundColor(Color.LTGRAY)
-            pendingTable.addView(headerRow)
-
-            val sdf = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
-            
+            val rowData = mutableListOf<Pair<Long, Double>>()
             while(cursor.moveToNext()) {
-                val ts = cursor.getLong(0)
-                val value = cursor.getDouble(1)
-                
-                val row = TableRow(this)
-                row.addView(TextView(this).apply { text = sdf.format(Date(ts)); setPadding(16,16,16,16) })
-                row.addView(TextView(this).apply { text = String.format("%.1f", value); setPadding(16,16,16,16) })
-                pendingTable.addView(row)
+                rowData.add(Pair(cursor.getLong(0), cursor.getDouble(1)))
+            }
+            cursor.close()
+
+            withContext(Dispatchers.Main) {
+                val pendingTable = findViewById<TableLayout>(R.id.pending_table)
+                pendingTable.removeAllViews()
+
+                if (rowData.isEmpty()) {
+                    val emptyView = TextView(this@MainActivity).apply {
+                        text = "No pending uploads"
+                        setPadding(16, 16, 16, 16)
+                        setTextColor(Color.GRAY)
+                        setTypeface(null, android.graphics.Typeface.ITALIC)
+                    }
+                    pendingTable.addView(emptyView)
+                } else {
+                    // Header
+                    val headerRow = TableRow(this@MainActivity)
+                    headerRow.addView(TextView(this@MainActivity).apply { text = "Time"; setPadding(16,16,16,16); setTypeface(null, android.graphics.Typeface.BOLD) })
+                    headerRow.addView(TextView(this@MainActivity).apply { text = "Value"; setPadding(16,16,16,16); setTypeface(null, android.graphics.Typeface.BOLD) })
+                    headerRow.setBackgroundColor(Color.LTGRAY)
+                    pendingTable.addView(headerRow)
+
+                    val sdf = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+                    
+                    for (row in rowData) {
+                        val tableRow = TableRow(this@MainActivity)
+                        tableRow.addView(TextView(this@MainActivity).apply { text = sdf.format(Date(row.first)); setPadding(16,16,16,16) })
+                        tableRow.addView(TextView(this@MainActivity).apply { text = String.format("%.1f", row.second); setPadding(16,16,16,16) })
+                        pendingTable.addView(tableRow)
+                    }
+                }
             }
         }
-        cursor.close()
     }
 
     private fun loadLastValueFromDb() {
-        val dbHelper = DatabaseHelper(this)
-        val db = dbHelper.readableDatabase
-        val projection = arrayOf(
-            GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE,
-            GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP
-        )
-        val sortOrder = "${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} DESC"
-        val cursor = db.query(
-            GlucoseContract.GlucoseEntry.TABLE_NAME,
-            projection,
-            null,
-            null,
-            null,
-            null,
-            sortOrder,
-            "1"
-        )
+        lifecycleScope.launch(Dispatchers.IO) {
+            val db = dbHelper.readableDatabase
+            val projection = arrayOf(
+                GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE,
+                GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP
+            )
+            val sortOrder = "${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} DESC"
+            val cursor = db.query(
+                GlucoseContract.GlucoseEntry.TABLE_NAME,
+                projection,
+                null,
+                null,
+                null,
+                null,
+                sortOrder,
+                "1"
+            )
 
-        with(cursor) {
-            if (moveToNext()) {
-                val value = getDouble(getColumnIndexOrThrow(GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE))
-                val timestamp = getLong(getColumnIndexOrThrow(GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP))
+            var lastValue: Double? = null
+            var ageInMinutes: Long? = null
+
+            if (cursor.moveToNext()) {
+                lastValue = cursor.getDouble(cursor.getColumnIndexOrThrow(GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE))
+                val timestamp = cursor.getLong(cursor.getColumnIndexOrThrow(GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP))
                 val currentTime = Calendar.getInstance().timeInMillis
-                val ageInMinutes = (currentTime - timestamp) / (60 * 1000)
-                
-                cgmValueTextView.text = value.toString()
-                sampleAgeTextView.text = "Sample scanned: $ageInMinutes mins ago"
-                
-                // We don't have the last arrow in DB, default to horizontal for coloring if not known
-                updateColors(value, "→")
+                ageInMinutes = (currentTime - timestamp) / (60 * 1000)
             }
-            close()
+            cursor.close()
+
+            withContext(Dispatchers.Main) {
+                if (lastValue != null && ageInMinutes != null) {
+                    cgmValueTextView.text = lastValue.toString()
+                    sampleAgeTextView.text = "Sample scanned: $ageInMinutes mins ago"
+                    updateColors(lastValue, "→")
+                }
+            }
         }
 
         // Count pending
-        val pendingCursor = db.rawQuery(
-            "SELECT COUNT(*) FROM ${GlucoseContract.GlucoseEntry.TABLE_NAME} WHERE ${GlucoseContract.GlucoseEntry.COLUMN_NAME_UPLOADED} = 0",
-            null
-        )
-        if (pendingCursor.moveToFirst()) {
-            val count = pendingCursor.getInt(0)
-            pendingSamplesTextView.text = "Pending: $count"
+        lifecycleScope.launch(Dispatchers.IO) {
+            val db = dbHelper.readableDatabase
+            val pendingCursor = db.rawQuery(
+                "SELECT COUNT(*) FROM ${GlucoseContract.GlucoseEntry.TABLE_NAME} WHERE ${GlucoseContract.GlucoseEntry.COLUMN_NAME_UPLOADED} = 0",
+                null
+            )
+            var count = 0
+            if (pendingCursor.moveToFirst()) {
+                count = pendingCursor.getInt(0)
+            }
+            pendingCursor.close()
+
+            withContext(Dispatchers.Main) {
+                pendingSamplesTextView.text = "Pending: $count"
+            }
         }
-        pendingCursor.close()
     }
 
     override fun onResume() {
@@ -418,7 +480,11 @@ class MainActivity : AppCompatActivity() {
             addAction(CgmService.ACTION_ARROW_UPDATE)
             addAction(CgmService.ACTION_UPLOAD_STATUS)
         }
-        ContextCompat.registerReceiver(this, cgmReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(cgmReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(cgmReceiver, filter)
+        }
         handler.post(updateTimeRunnable)
         loadChartData()
         loadPendingTable()
@@ -433,6 +499,18 @@ class MainActivity : AppCompatActivity() {
         }
 
         checkBatteryOptimizations()
+        checkHealthConnectPermissions()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        unregisterReceiver(cgmReceiver)
+        handler.removeCallbacks(updateTimeRunnable)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        dbHelper.close()
     }
 
     private fun checkBatteryOptimizations() {
@@ -451,12 +529,6 @@ class MainActivity : AppCompatActivity() {
                     .show()
             }
         }
-    }
-
-    override fun onPause() {
-        super.onPause()
-        unregisterReceiver(cgmReceiver)
-        handler.removeCallbacks(updateTimeRunnable)
     }
 
     private fun checkPermissionsAndStartService() {
