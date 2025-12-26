@@ -501,7 +501,7 @@ class CgmService : Service() {
             broadcastUploadStatus()
 
             // Trigger Nightscout upload
-            uploadToNightscout()
+            // uploadToNightscout() // Commented out to ensure it waits for the scheduled timer
 
         } else {
             Log.d("CgmService", "Nordic block too short for glucose data (${data.size} bytes)")
