@@ -387,7 +387,7 @@ class MainActivity : AppCompatActivity() {
                 val ageInMinutes = (currentTime - timestamp) / (60 * 1000)
                 
                 cgmValueTextView.text = value.toString()
-                sampleAgeTextView.text = "$ageInMinutes mins ago"
+                sampleAgeTextView.text = "Sample scanned: $ageInMinutes mins ago"
                 
                 // We don't have the last arrow in DB, default to horizontal for coloring if not known
                 updateColors(value, "→")
