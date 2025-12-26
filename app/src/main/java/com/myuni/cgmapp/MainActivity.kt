@@ -10,6 +10,8 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.appwidget.AppWidgetManager
 import android.content.ComponentName
 import android.graphics.Color
@@ -22,13 +24,19 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var cgmValueTextView: TextView
     private lateinit var arrowTextView: TextView
     private lateinit var sampleAgeTextView: TextView
+    private lateinit var pendingSamplesTextView: TextView
+    private lateinit var nextUploadTextView: TextView
     
+    private val handler = Handler(Looper.getMainLooper())
+    private var nextUploadTime: Long = 0
+
     private val cgmReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
@@ -47,7 +55,38 @@ class MainActivity : AppCompatActivity() {
                     val currentValue = currentValueStr.toDoubleOrNull() ?: 0.0
                     updateColors(currentValue, arrow)
                 }
+                CgmService.ACTION_UPLOAD_STATUS -> {
+                    val pendingCount = intent.getIntExtra(CgmService.EXTRA_PENDING_COUNT, 0)
+                    nextUploadTime = intent.getLongExtra(CgmService.EXTRA_NEXT_UPLOAD_TIME, 0)
+                    pendingSamplesTextView.text = "Pending: $pendingCount"
+                    updateNextUploadText()
+                }
             }
+        }
+    }
+
+    private val updateTimeRunnable = object : Runnable {
+        override fun run() {
+            updateNextUploadText()
+            handler.postDelayed(this, 1000)
+        }
+    }
+
+    private fun updateNextUploadText() {
+        if (nextUploadTime == 0L) {
+            nextUploadTextView.text = "Next upload: --:--"
+            return
+        }
+
+        val now = System.currentTimeMillis()
+        val diff = nextUploadTime - now
+        
+        if (diff <= 0) {
+            nextUploadTextView.text = "Next upload: Soon..."
+        } else {
+            val minutes = diff / (60 * 1000)
+            val seconds = (diff / 1000) % 60
+            nextUploadTextView.text = String.format(Locale.getDefault(), "Next upload: %02d:%02d", minutes, seconds)
         }
     }
 
@@ -86,6 +125,9 @@ class MainActivity : AppCompatActivity() {
         cgmValueTextView = findViewById(R.id.cgmvalue)
         arrowTextView = findViewById(R.id.arrow)
         sampleAgeTextView = findViewById(R.id.sample_age)
+        pendingSamplesTextView = findViewById(R.id.pending_samples)
+        nextUploadTextView = findViewById(R.id.next_upload)
+        
         val settingsButton = findViewById<android.widget.ImageButton>(R.id.settings_button)
 
         settingsButton.setOnClickListener {
@@ -103,6 +145,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         checkPermissionsAndStartService()
+        
+        handler.post(updateTimeRunnable)
     }
 
     private fun loadLastValueFromDb() {
@@ -139,6 +183,17 @@ class MainActivity : AppCompatActivity() {
             }
             close()
         }
+
+        // Count pending
+        val pendingCursor = db.rawQuery(
+            "SELECT COUNT(*) FROM ${GlucoseContract.GlucoseEntry.TABLE_NAME} WHERE ${GlucoseContract.GlucoseEntry.COLUMN_NAME_UPLOADED} = 0",
+            null
+        )
+        if (pendingCursor.moveToFirst()) {
+            val count = pendingCursor.getInt(0)
+            pendingSamplesTextView.text = "Pending: $count"
+        }
+        pendingCursor.close()
     }
 
     override fun onResume() {
@@ -146,13 +201,16 @@ class MainActivity : AppCompatActivity() {
         val filter = IntentFilter().apply {
             addAction(CgmService.ACTION_CGM_UPDATE)
             addAction(CgmService.ACTION_ARROW_UPDATE)
+            addAction(CgmService.ACTION_UPLOAD_STATUS)
         }
         ContextCompat.registerReceiver(this, cgmReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+        handler.post(updateTimeRunnable)
     }
 
     override fun onPause() {
         super.onPause()
         unregisterReceiver(cgmReceiver)
+        handler.removeCallbacks(updateTimeRunnable)
     }
 
     private fun checkPermissionsAndStartService() {

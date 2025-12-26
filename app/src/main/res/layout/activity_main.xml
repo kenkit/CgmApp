@@ -65,5 +65,21 @@
             android:textSize="16sp"
             android:layout_marginTop="8dp"/>
 
+        <TextView
+            android:id="@+id/pending_samples"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Pending: 0"
+            android:textSize="14sp"
+            android:layout_marginTop="4dp"/>
+
+        <TextView
+            android:id="@+id/next_upload"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Next upload: --:--"
+            android:textSize="14sp"
+            android:layout_marginTop="4dp"/>
+
     </LinearLayout>
 </RelativeLayout>

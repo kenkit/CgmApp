@@ -37,9 +37,12 @@ class CgmService : Service() {
         const val CHANNEL_ID = "CgmServiceChannel"
         const val ACTION_CGM_UPDATE = "com.myuni.cgmapp.CGM_UPDATE"
         const val ACTION_ARROW_UPDATE = "com.myuni.cgmapp.ARROW_UPDATE"
+        const val ACTION_UPLOAD_STATUS = "com.myuni.cgmapp.UPLOAD_STATUS"
         const val EXTRA_CGM_VALUE = "EXTRA_CGM_VALUE"
         const val EXTRA_ARROW_VALUE = "EXTRA_ARROW_VALUE"
         const val EXTRA_CGM_AGE = "EXTRA_CGM_AGE"
+        const val EXTRA_PENDING_COUNT = "EXTRA_PENDING_COUNT"
+        const val EXTRA_NEXT_UPLOAD_TIME = "EXTRA_NEXT_UPLOAD_TIME"
         // Scan for 3.25 seconds as requested
         private const val SCAN_DURATION: Long = 5000
         private const val SCAN_INTERVAL: Long = 60 * 1000 // 5 minutes
@@ -58,6 +61,7 @@ class CgmService : Service() {
     private val gson = Gson()
     private val isoFormatter = DateTimeFormatter.ISO_INSTANT.withZone(ZoneId.of("UTC"))
     private var jwtToken: String? = null
+    private var nextUploadTime: Long = 0
 
     data class NightscoutEntry(
         val type: String = "sgv",
@@ -96,6 +100,29 @@ class CgmService : Service() {
         return (System.currentTimeMillis() / 1000) > (exp - 60)
     }
 
+    private fun getPendingCount(): Int {
+        val db = dbHelper.readableDatabase
+        val cursor = db.rawQuery(
+            "SELECT COUNT(*) FROM ${GlucoseContract.GlucoseEntry.TABLE_NAME} WHERE ${GlucoseContract.GlucoseEntry.COLUMN_NAME_UPLOADED} = 0",
+            null
+        )
+        var count = 0
+        if (cursor.moveToFirst()) {
+            count = cursor.getInt(0)
+        }
+        cursor.close()
+        return count
+    }
+
+    private fun broadcastUploadStatus() {
+        val count = getPendingCount()
+        val intent = Intent(ACTION_UPLOAD_STATUS)
+        intent.putExtra(EXTRA_PENDING_COUNT, count)
+        intent.putExtra(EXTRA_NEXT_UPLOAD_TIME, nextUploadTime)
+        intent.setPackage(packageName)
+        sendBroadcast(intent)
+    }
+
     private fun uploadToNightscout() {
         val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
         if (!sharedPref.getBoolean("enable_upload", false)) return
@@ -130,30 +157,35 @@ class CgmService : Service() {
             }
 
             override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
-                val body = response.body?.string()
-                if (response.isSuccessful && body != null) {
-                    try {
-                        val authResponse = gson.fromJson(body, AuthResponse::class.java)
-                        jwtToken = authResponse.token
-                        
-                        // Save to preferences
-                        val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
-                        with(sharedPref.edit()) {
-                            putString("jwt_token", authResponse.token)
-                            putLong("jwt_exp", authResponse.exp)
-                            apply()
+                try {
+                    val body = response.body?.string()
+                    if (response.isSuccessful && body != null) {
+                        try {
+                            val authResponse = gson.fromJson(body, AuthResponse::class.java)
+                            jwtToken = authResponse.token
+                            
+                            // Save to preferences
+                            val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
+                            with(sharedPref.edit()) {
+                                putString("jwt_token", authResponse.token)
+                                putLong("jwt_exp", authResponse.exp)
+                                apply()
+                            }
+                            
+                            Log.d("CgmService", "Nightscout authorization successful, expires at ${authResponse.exp}")
+                            // Now perform the actual upload
+                            performUpload(url)
+                        } catch (e: Exception) {
+                            Log.e("CgmService", "Error parsing auth response", e)
                         }
-                        
-                        Log.d("CgmService", "Nightscout authorization successful, expires at ${authResponse.exp}")
-                        // Now perform the actual upload
-                        performUpload(url)
-                    } catch (e: Exception) {
-                        Log.e("CgmService", "Error parsing auth response", e)
+                    } else {
+                        Log.e("CgmService", "Auth request failed: ${response.code}")
                     }
-                } else {
-                    Log.e("CgmService", "Auth request failed: ${response.code}")
+                } catch (e: Exception) {
+                    Log.e("CgmService", "Error in auth response callback", e)
+                } finally {
+                    response.close()
                 }
-                response.close()
             }
         })
     }
@@ -194,7 +226,11 @@ class CgmService : Service() {
         }
         cursor.close()
 
-        if (entries.isEmpty()) return
+        if (entries.isEmpty()) {
+            // Even if empty, we might want to update status to show 0 pending
+            broadcastUploadStatus()
+            return
+        }
 
         val json = gson.toJson(entries)
         val body = json.toRequestBody("application/json".toMediaType())
@@ -212,39 +248,46 @@ class CgmService : Service() {
             }
 
             override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
-                if (response.code == 401) {
-                    Log.w("CgmService", "JWT expired or invalid, clearing from prefs and retrying next time")
-                    jwtToken = null
-                    val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
-                    with(sharedPref.edit()) {
-                        remove("jwt_token")
-                        remove("jwt_exp")
-                        apply()
-                    }
-                } else if (response.isSuccessful) {
-                    Log.d("CgmService", "Nightscout upload successful, marking ${timestampsToMark.size} entries as uploaded")
-                    val writeDb = dbHelper.writableDatabase
-                    writeDb.beginTransaction()
-                    try {
-                        val values = ContentValues().apply {
-                            put(GlucoseContract.GlucoseEntry.COLUMN_NAME_UPLOADED, 1)
+                try {
+                    if (response.code == 401) {
+                        Log.w("CgmService", "JWT expired or invalid, clearing from prefs and retrying next time")
+                        jwtToken = null
+                        val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
+                        with(sharedPref.edit()) {
+                            remove("jwt_token")
+                            remove("jwt_exp")
+                            apply()
                         }
-                        for (ts in timestampsToMark) {
-                            writeDb.update(
-                                GlucoseContract.GlucoseEntry.TABLE_NAME,
-                                values,
-                                "${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} = ?",
-                                arrayOf(ts.toString())
-                            )
+                    } else if (response.isSuccessful) {
+                        Log.d("CgmService", "Nightscout upload successful, marking ${timestampsToMark.size} entries as uploaded")
+                        val writeDb = dbHelper.writableDatabase
+                        writeDb.beginTransaction()
+                        try {
+                            val values = ContentValues().apply {
+                                put(GlucoseContract.GlucoseEntry.COLUMN_NAME_UPLOADED, 1)
+                            }
+                            for (ts in timestampsToMark) {
+                                writeDb.update(
+                                    GlucoseContract.GlucoseEntry.TABLE_NAME,
+                                    values,
+                                    "${GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP} = ?",
+                                    arrayOf(ts.toString())
+                                )
+                            }
+                            writeDb.setTransactionSuccessful()
+                        } finally {
+                            writeDb.endTransaction()
                         }
-                        writeDb.setTransactionSuccessful()
-                    } finally {
-                        writeDb.endTransaction()
+                        // Update UI with new pending count (should be 0 or close to it)
+                        broadcastUploadStatus()
+                    } else {
+                        Log.e("CgmService", "Nightscout upload failed with code: ${response.code} ${response.message}")
                     }
-                } else {
-                    Log.e("CgmService", "Nightscout upload failed with code: ${response.code} ${response.message}")
+                } catch (e: Exception) {
+                    Log.e("CgmService", "Error in upload response callback", e)
+                } finally {
+                    response.close()
                 }
-                response.close()
             }
         })
     }
@@ -254,11 +297,15 @@ class CgmService : Service() {
             uploadToNightscout()
             val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
             val intervalMins = sharedPref.getInt("upload_interval", 5)
-            handler.postDelayed(this, intervalMins * 60 * 1000L)
+            val delayMillis = intervalMins * 60 * 1000L
+            nextUploadTime = System.currentTimeMillis() + delayMillis
+            broadcastUploadStatus()
+            handler.postDelayed(this, delayMillis)
         }
     }
 
     private fun startPeriodicNightscoutUpload() {
+        // Initial run
         handler.post(nightscoutRunnable)
     }
 
@@ -435,6 +482,9 @@ class CgmService : Service() {
             arrowIntent.putExtra(EXTRA_ARROW_VALUE, arrow)
             arrowIntent.setPackage(packageName)
             sendBroadcast(arrowIntent)
+
+            // Notify about new pending count (it increased by 1)
+            broadcastUploadStatus()
 
             // Trigger Nightscout upload
             uploadToNightscout()
