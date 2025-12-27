@@ -87,7 +87,7 @@ class MainActivity : AppCompatActivity() {
         if (healthConnectPermissionRequested) return
         
         val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
-        if (!sharedPref.getBoolean("enable_google_fit", false)) return
+        if (!sharedPref.getBoolean("enable_health_connect", false)) return
         if (!healthConnectManager.isAvailable()) {
             Log.w("MainActivity", "Health Connect not available")
             return
@@ -113,6 +113,14 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun formatScanTime(timestamp: Long): String {
+        val now = System.currentTimeMillis()
+        val isOlderThanADay = (now - timestamp) > (24 * 60 * 60 * 1000)
+        val pattern = if (isOlderThanADay) "MMM dd, HH:mm" else "HH:mm"
+        val sdf = SimpleDateFormat(pattern, Locale.getDefault())
+        return sdf.format(Date(timestamp))
+    }
+
     private val cgmReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
@@ -124,8 +132,13 @@ class MainActivity : AppCompatActivity() {
                     cgmValueTextView.text = value.toString()
                     setStrikeThrough(cgmValueTextView, false)
                     
-                    val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
-                    sampleAgeTextView.text = "Current scan at: ${sdf.format(Date())}"
+                    val timestamp = System.currentTimeMillis() - (age.toLong() * 60 * 1000)
+                    val cal = Calendar.getInstance()
+                    cal.timeInMillis = timestamp
+                    cal.set(Calendar.SECOND, 0)
+                    cal.set(Calendar.MILLISECOND, 0)
+                    
+                    sampleAgeTextView.text = "Sample scanned:$age mins ago"
                     
                     updateColors(value, arrowTextView.text.toString())
                     loadChartData() // Refresh chart
@@ -458,13 +471,7 @@ class MainActivity : AppCompatActivity() {
             if (cursor.moveToNext()) {
                 lastValue = cursor.getDouble(cursor.getColumnIndexOrThrow(GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE))
                 val timestamp = cursor.getLong(cursor.getColumnIndexOrThrow(GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP))
-                
-                val now = System.currentTimeMillis()
-                val isOlderThanADay = (now - timestamp) > (24 * 60 * 60 * 1000)
-                val pattern = if (isOlderThanADay) "MMM dd, HH:mm" else "HH:mm"
-                
-                val sdf = SimpleDateFormat(pattern, Locale.getDefault())
-                savedTime = sdf.format(Date(timestamp))
+                savedTime = formatScanTime(timestamp)
             }
             cursor.close()
 
@@ -514,6 +521,7 @@ class MainActivity : AppCompatActivity() {
             registerReceiver(cgmReceiver, filter)
         }
         handler.post(updateTimeRunnable)
+        loadLastValueFromDb() // Ensure UI is populated from DB on resume
         loadChartData()
         loadPendingTable()
         
