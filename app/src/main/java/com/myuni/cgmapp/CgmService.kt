@@ -66,6 +66,8 @@ class CgmService : Service() {
     private var last_cgm_value = 0.0
     private var wakeLock: PowerManager.WakeLock? = null
     private var syncWakeLock: PowerManager.WakeLock? = null
+    private val processedDevicesInCurrentScan = mutableSetOf<String>()
+    private var currentScanStartTime: Long = 0
 
     private fun acquireSyncWakeLock() {
         if (syncWakeLock == null) {
@@ -477,6 +479,10 @@ class CgmService : Service() {
         Log.d("CgmService", "Starting scan cycle for $selectedMac")
         try {
             val scanDuration = sharedPref.getInt("scan_duration", 5) * 1000L
+            // Reset deduplication for this scan cycle
+            processedDevicesInCurrentScan.clear()
+            currentScanStartTime = System.currentTimeMillis()
+            
             // Acquire wake lock to ensure CPU doesn't sleep during scan
             wakeLock?.acquire(scanDuration + 1000)
 
@@ -516,6 +522,12 @@ class CgmService : Service() {
                 // Log.d("CgmService", "Ignoring device ${peripheral.address} (Selected: $selectedMac)")
                 return
             }
+            
+            // Deduplication: Only process this device once per scan cycle
+            if (processedDevicesInCurrentScan.contains(peripheral.address)) {
+                return
+            }
+            processedDevicesInCurrentScan.add(peripheral.address)
 
             Log.d("CgmService", "Discovered: ${peripheral.name} (${peripheral.address})")
 
@@ -637,7 +649,9 @@ class CgmService : Service() {
             val ageInMinutes = (data[3].toInt() and 0xFF) / 6
             
             // Calculate timestamp based on age, truncating to the minute
+            // Use currentScanStartTime to ensure stability across advertisements in the same scan
             val cal = Calendar.getInstance()
+            cal.timeInMillis = if (currentScanStartTime != 0L) currentScanStartTime else System.currentTimeMillis()
             cal.set(Calendar.SECOND, 0)
             cal.set(Calendar.MILLISECOND, 0)
             val currentTime = cal.timeInMillis
