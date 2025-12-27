@@ -57,6 +57,8 @@ class CgmService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var healthConnectManager: HealthConnectManager
     private var isScanning = false
+    private var isScanStarted = false
+    private var isUploadStarted = false
     private var last_cgm_value = 0.0
     private var wakeLock: PowerManager.WakeLock? = null
     // Service UUID
@@ -643,8 +645,17 @@ class CgmService : Service() {
             }
         }
 
-        startPeriodicScan()
-        startPeriodicNightscoutUpload()
+        if (!isScanStarted) {
+            Log.d("CgmService", "Starting periodic scan chain")
+            isScanStarted = true
+            startPeriodicScan()
+        }
+        
+        if (!isUploadStarted) {
+            Log.d("CgmService", "Starting periodic upload chain")
+            isUploadStarted = true
+            startPeriodicNightscoutUpload()
+        }
 
         return START_STICKY
     }
@@ -685,8 +696,8 @@ class CgmService : Service() {
             // Acquire wake lock to ensure CPU doesn't sleep during scan
             wakeLock?.acquire(scanDuration + 1000)
 
-            // Scan for peripherals with our specific Service UUID
-            centralManager.scanForPeripheralsWithServices(listOf(SERVICE_UUID))
+            // Scan for specifically the selected peripheral
+            centralManager.scanForPeripheralsWithAddresses(listOf(selectedMac))
             isScanning = true
 
             // Stop scanning after SCAN_DURATION

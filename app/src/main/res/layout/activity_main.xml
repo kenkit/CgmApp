@@ -9,12 +9,12 @@
 
     <TextView
         android:id="@+id/selected_device_status"
-        android:layout_width="wrap_content"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_alignParentTop="true"
-        android:layout_alignParentStart="true"
+        android:layout_toStartOf="@id/settings_button"
         android:layout_margin="16dp"
-        android:text="No Device Selected"
+        android:text="Please open settings and select a device from bluetooth scan"
         android:textSize="14sp"
         android:textColor="@android:color/darker_gray" />
 

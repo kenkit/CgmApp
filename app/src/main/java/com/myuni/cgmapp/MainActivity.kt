@@ -18,6 +18,7 @@ import android.provider.Settings
 import android.appwidget.AppWidgetManager
 import android.content.ComponentName
 import android.graphics.Color
+import android.graphics.Paint
 import android.util.Log
 import android.widget.TableLayout
 import android.widget.TableRow
@@ -47,6 +48,10 @@ import java.util.Date
 import java.util.ArrayList
 
 class MainActivity : AppCompatActivity() {
+
+    companion object {
+        private const val GOOGLE_FIT_PERMISSIONS_REQUEST_CODE = 1001
+    }
 
     private lateinit var cgmValueTextView: TextView
     private lateinit var arrowTextView: TextView
@@ -100,6 +105,14 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun setStrikeThrough(textView: TextView, enabled: Boolean) {
+        if (enabled) {
+            textView.paintFlags = textView.paintFlags or Paint.STRIKE_THRU_TEXT_FLAG
+        } else {
+            textView.paintFlags = textView.paintFlags and Paint.STRIKE_THRU_TEXT_FLAG.inv()
+        }
+    }
+
     private val cgmReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
@@ -107,8 +120,13 @@ class MainActivity : AppCompatActivity() {
                     val value = intent.getDoubleExtra(CgmService.EXTRA_CGM_VALUE, 0.0)
                     val age = intent.getIntExtra(CgmService.EXTRA_CGM_AGE, 0)
                     currentRssi = intent.getIntExtra(CgmService.EXTRA_RSSI, 0)
+                    
                     cgmValueTextView.text = value.toString()
-                    sampleAgeTextView.text = "Sample scanned:$age mins ago"
+                    setStrikeThrough(cgmValueTextView, false)
+                    
+                    val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
+                    sampleAgeTextView.text = "Current scan at: ${sdf.format(Date())}"
+                    
                     updateColors(value, arrowTextView.text.toString())
                     loadChartData() // Refresh chart
                     
@@ -435,21 +453,31 @@ class MainActivity : AppCompatActivity() {
             )
 
             var lastValue: Double? = null
-            var ageInMinutes: Long? = null
+            var savedTime: String? = null
 
             if (cursor.moveToNext()) {
                 lastValue = cursor.getDouble(cursor.getColumnIndexOrThrow(GlucoseContract.GlucoseEntry.COLUMN_NAME_VALUE))
                 val timestamp = cursor.getLong(cursor.getColumnIndexOrThrow(GlucoseContract.GlucoseEntry.COLUMN_NAME_TIMESTAMP))
-                val currentTime = Calendar.getInstance().timeInMillis
-                ageInMinutes = (currentTime - timestamp) / (60 * 1000)
+                
+                val now = System.currentTimeMillis()
+                val isOlderThanADay = (now - timestamp) > (24 * 60 * 60 * 1000)
+                val pattern = if (isOlderThanADay) "MMM dd, HH:mm" else "HH:mm"
+                
+                val sdf = SimpleDateFormat(pattern, Locale.getDefault())
+                savedTime = sdf.format(Date(timestamp))
             }
             cursor.close()
 
             withContext(Dispatchers.Main) {
-                if (lastValue != null && ageInMinutes != null) {
+                if (lastValue != null && savedTime != null) {
                     cgmValueTextView.text = lastValue.toString()
-                    sampleAgeTextView.text = "Sample scanned: $ageInMinutes mins ago"
+                    sampleAgeTextView.text = "Last scan at: $savedTime"
                     updateColors(lastValue, "→")
+                    
+                    // If we haven't received a fresh reading this session, cross it out
+                    if (currentRssi == 0) {
+                        setStrikeThrough(cgmValueTextView, true)
+                    }
                 }
             }
         }
@@ -492,10 +520,16 @@ class MainActivity : AppCompatActivity() {
         val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
         val deviceName = sharedPref.getString("selected_device_name", null)
         if (deviceName != null) {
-            val rssiStr = if (currentRssi != 0) "$currentRssi dBm" else "-- dBm"
-            selectedDeviceStatusTextView.text = "Connected: $deviceName (RSSI: $rssiStr)"
+            if (currentRssi != 0) {
+                selectedDeviceStatusTextView.text = "Connected: $deviceName (RSSI: $currentRssi dBm)"
+                selectedDeviceStatusTextView.setTextColor(Color.parseColor("#808080")) // Gray
+            } else {
+                selectedDeviceStatusTextView.text = "Waiting for initial signal from:$deviceName..."
+                selectedDeviceStatusTextView.setTextColor(Color.parseColor("#FFA500")) // Orange
+            }
         } else {
-            selectedDeviceStatusTextView.text = "No Device Selected"
+            selectedDeviceStatusTextView.text = "Please open settings and select a device from bluetooth scan"
+            selectedDeviceStatusTextView.setTextColor(Color.RED)
         }
 
         checkBatteryOptimizations()
