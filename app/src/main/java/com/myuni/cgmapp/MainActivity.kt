@@ -132,13 +132,7 @@ class MainActivity : AppCompatActivity() {
                     cgmValueTextView.text = value.toString()
                     setStrikeThrough(cgmValueTextView, false)
                     
-                    val timestamp = System.currentTimeMillis() - (age.toLong() * 60 * 1000)
-                    val cal = Calendar.getInstance()
-                    cal.timeInMillis = timestamp
-                    cal.set(Calendar.SECOND, 0)
-                    cal.set(Calendar.MILLISECOND, 0)
-                    
-                    sampleAgeTextView.text = "Sample scanned:$age mins ago"
+                    sampleAgeTextView.text = "Sample scanned: $age mins ago"
                     
                     updateColors(value, arrowTextView.text.toString())
                     loadChartData() // Refresh chart
