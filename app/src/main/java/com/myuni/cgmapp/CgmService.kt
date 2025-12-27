@@ -1,5 +1,6 @@
 package com.myuni.cgmapp
 
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -35,6 +36,8 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import com.google.gson.Gson
+import java.util.Date
+import java.util.concurrent.atomic.AtomicBoolean
 
 class CgmService : Service() {
 
@@ -50,6 +53,7 @@ class CgmService : Service() {
         const val EXTRA_DEVICE_NAME = "EXTRA_DEVICE_NAME"
         const val EXTRA_PENDING_COUNT = "EXTRA_PENDING_COUNT"
         const val EXTRA_NEXT_UPLOAD_TIME = "EXTRA_NEXT_UPLOAD_TIME"
+        const val ACTION_SYNC_AND_UPLOAD = "com.myuni.cgmapp.SYNC_AND_UPLOAD"
     }
 
     private lateinit var centralManager: BluetoothCentralManager
@@ -57,10 +61,27 @@ class CgmService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var healthConnectManager: HealthConnectManager
     private var isScanning = false
-    private var isScanStarted = false
-    private var isUploadStarted = false
+    private val isScanStarted = AtomicBoolean(false)
+    private val isUploadStarted = AtomicBoolean(false)
     private var last_cgm_value = 0.0
     private var wakeLock: PowerManager.WakeLock? = null
+    private var syncWakeLock: PowerManager.WakeLock? = null
+
+    private fun acquireSyncWakeLock() {
+        if (syncWakeLock == null) {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            syncWakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "CgmApp::SyncWakeLock")
+        }
+        if (syncWakeLock?.isHeld == false) {
+            syncWakeLock?.acquire(2 * 60 * 1000L) // 2 minutes max
+        }
+    }
+
+    private fun releaseSyncWakeLock() {
+        if (syncWakeLock?.isHeld == true) {
+            syncWakeLock?.release()
+        }
+    }
     // Service UUID
     private val SERVICE_UUID = UUID.fromString("0000f000-0000-1000-8000-00805f9b34fb")
     private lateinit var dbHelper: DatabaseHelper
@@ -133,12 +154,18 @@ class CgmService : Service() {
 
     private fun uploadToNightscout() {
         val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
-        if (!sharedPref.getBoolean("enable_upload", false)) return
+        if (!sharedPref.getBoolean("enable_upload", false)) {
+            releaseSyncWakeLock()
+            return
+        }
 
         val url = sharedPref.getString("nightscout_url", "") ?: ""
         val apiSecret = sharedPref.getString("api_secret", "") ?: ""
 
-        if (url.isEmpty() || apiSecret.isEmpty()) return
+        if (url.isEmpty() || apiSecret.isEmpty()) {
+            releaseSyncWakeLock()
+            return
+        }
 
         jwtToken = sharedPref.getString("jwt_token", null)
 
@@ -163,6 +190,7 @@ class CgmService : Service() {
             override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
                 Log.e("CgmService", "Nightscout authorization failed", e)
                 broadcastUploadStatus()
+                releaseSyncWakeLock()
             }
 
             override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
@@ -186,12 +214,15 @@ class CgmService : Service() {
                             performUpload(url)
                         } catch (e: Exception) {
                             Log.e("CgmService", "Error parsing auth response", e)
+                            releaseSyncWakeLock()
                         }
                     } else {
                         Log.e("CgmService", "Auth request failed: ${response.code}")
+                        releaseSyncWakeLock()
                     }
                 } catch (e: Exception) {
                     Log.e("CgmService", "Error in auth response callback", e)
+                    releaseSyncWakeLock()
                 } finally {
                     response.close()
                 }
@@ -240,6 +271,7 @@ class CgmService : Service() {
         if (entries.isEmpty()) {
             // Even if empty, we might want to update status to show 0 pending
             broadcastUploadStatus()
+            releaseSyncWakeLock()
             return
         }
 
@@ -257,6 +289,7 @@ class CgmService : Service() {
             override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
                 Log.e("CgmService", "Nightscout upload failed", e)
                 broadcastUploadStatus()
+                releaseSyncWakeLock()
             }
 
             override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
@@ -295,6 +328,7 @@ class CgmService : Service() {
                         val pendingCount = getPendingCount()
                         if (pendingCount > 0) {
                             performUpload(url)
+                            return // Keep wakelock for next batch
                         } else {
                             broadcastUploadStatus()
                         }
@@ -305,6 +339,7 @@ class CgmService : Service() {
                     Log.e("CgmService", "Error in upload response callback", e)
                 } finally {
                     response.close()
+                    releaseSyncWakeLock()
                 }
             }
         })
@@ -312,7 +347,10 @@ class CgmService : Service() {
 
     private fun syncToHealthConnect() {
         val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
-        if (!sharedPref.getBoolean("enable_health_connect", false)) return
+        if (!sharedPref.getBoolean("enable_health_connect", false)) {
+            // releaseSyncWakeLock() // Might be too early if Nightscout is running
+            return
+        }
         if (!healthConnectManager.isAvailable()) return
 
         serviceScope.launch {
@@ -338,7 +376,10 @@ class CgmService : Service() {
             }
             cursor.close()
 
-            if (records.isEmpty()) return@launch
+            if (records.isEmpty()) {
+                releaseSyncWakeLock()
+                return@launch
+            }
 
             try {
                 healthConnectManager.writeBloodGlucoseBatch(records)
@@ -373,28 +414,97 @@ class CgmService : Service() {
         }
     }
 
-    private val nightscoutRunnable = object : Runnable {
-        override fun run() {
-            uploadToNightscout()
-            syncToHealthConnect()
-            
-            // Clean up old records once a day (approx)
-            if (System.currentTimeMillis() % (24 * 60 * 60 * 1000) < (5 * 60 * 1000)) {
-                dbHelper.cleanupOldRecords()
-            }
+    private fun scheduleNextSync() {
+        val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
+        val intervalMins = sharedPref.getInt("upload_interval", 5)
+        val delayMillis = intervalMins * 60 * 1000L
+        
+        Log.d("CgmService", "Scheduling next sync in $intervalMins minutes")
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val intent = Intent(this, CgmService::class.java).apply {
+            action = ACTION_SYNC_AND_UPLOAD
+        }
+        val pendingIntent = PendingIntent.getService(
+            this, 
+            0, 
+            intent, 
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        
+        val nextTime = System.currentTimeMillis() + delayMillis
+        nextUploadTime = nextTime
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, nextTime, pendingIntent)
+        } else {
+            alarmManager.setExact(AlarmManager.RTC_WAKEUP, nextTime, pendingIntent)
+        }
+        broadcastUploadStatus()
+    }
 
+    private val scanRunnable = object : Runnable {
+        override fun run() {
+            startScan()
             val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
-            val intervalMins = sharedPref.getInt("upload_interval", 5)
-            val delayMillis = intervalMins * 60 * 1000L
-            nextUploadTime = System.currentTimeMillis() + delayMillis
-            broadcastUploadStatus() // This ensures the countdown is updated
-            handler.postDelayed(this, delayMillis)
+            val scanIntervalMins = sharedPref.getInt("scan_interval", 1)
+            Log.d("CgmService", "Next scan in $scanIntervalMins minutes")
+            // Schedule next scan after INTERVAL
+            handler.postDelayed(this, scanIntervalMins * 60 * 1000L)
         }
     }
 
-    private fun startPeriodicNightscoutUpload() {
-        // Initial run
-        handler.post(nightscoutRunnable)
+    private fun startPeriodicScan() {
+        Log.d("CgmService", "startPeriodicScan immediately")
+        // Run immediately
+        handler.post(scanRunnable)
+    }
+
+    private fun startScan() {
+        if (isScanning) return
+        if (!::centralManager.isInitialized) {
+            Log.e("CgmService", "CentralManager not initialized, cannot scan")
+            return
+        }
+        
+        val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
+        val selectedMac = sharedPref.getString("selected_device_mac", null)
+        
+        if (selectedMac.isNullOrEmpty()) {
+            Log.d("CgmService", "No device selected, skipping scan.")
+            return
+        }
+
+        Log.d("CgmService", "Starting scan cycle for $selectedMac")
+        try {
+            val scanDuration = sharedPref.getInt("scan_duration", 5) * 1000L
+            // Acquire wake lock to ensure CPU doesn't sleep during scan
+            wakeLock?.acquire(scanDuration + 1000)
+
+            // Scan for specifically the selected peripheral
+            centralManager.scanForPeripheralsWithAddresses(listOf(selectedMac))
+            isScanning = true
+
+            // Stop scanning after SCAN_DURATION
+            handler.postDelayed({
+                stopScan()
+            }, scanDuration)
+        } catch (e: Exception) {
+            Log.e("CgmService", "Error starting scan", e)
+            if (wakeLock?.isHeld == true) wakeLock?.release()
+        }
+    }
+
+    private fun stopScan() {
+        if (!isScanning) return
+        if (!::centralManager.isInitialized) return
+        
+        Log.d("CgmService", "Stopping scan.")
+        centralManager.stopScan()
+        isScanning = false
+
+        if (wakeLock?.isHeld == true) {
+            wakeLock?.release()
+        }
     }
 
     private val centralManagerCallback = object : BluetoothCentralManagerCallback() {
@@ -620,8 +730,24 @@ class CgmService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d("CgmService", "CgmService onStartCommand - Attempting to start foreground")
+        Log.d("CgmService", "CgmService onStartCommand - Action: ${intent?.action}")
         
+        if (intent?.action == ACTION_SYNC_AND_UPLOAD) {
+            Log.d("CgmService", "Executing alarm-triggered sync/upload")
+            acquireSyncWakeLock()
+            
+            // Daily cleanup
+            if (System.currentTimeMillis() % (24 * 60 * 60 * 1000) < (10 * 60 * 1000)) {
+                dbHelper.cleanupOldRecords()
+            }
+            
+            syncToHealthConnect()
+            uploadToNightscout()
+            
+            scheduleNextSync()
+            return START_STICKY
+        }
+
         val notification = notificationService.getInitialNotification(dbHelper)
         
         try {
@@ -645,89 +771,21 @@ class CgmService : Service() {
             }
         }
 
-        if (!isScanStarted) {
+        if (isScanStarted.compareAndSet(false, true)) {
             Log.d("CgmService", "Starting periodic scan chain")
-            isScanStarted = true
             startPeriodicScan()
+        } else {
+            Log.d("CgmService", "Periodic scan chain already running")
         }
         
-        if (!isUploadStarted) {
-            Log.d("CgmService", "Starting periodic upload chain")
-            isUploadStarted = true
-            startPeriodicNightscoutUpload()
+        if (isUploadStarted.compareAndSet(false, true)) {
+            Log.d("CgmService", "Initializing periodic sync/upload via AlarmManager")
+            scheduleNextSync()
+        } else {
+            Log.d("CgmService", "Periodic sync/upload already scheduled")
         }
 
         return START_STICKY
-    }
-
-    private val scanRunnable = object : Runnable {
-        override fun run() {
-            startScan()
-            val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
-            val scanIntervalMins = sharedPref.getInt("scan_interval", 1)
-            // Schedule next scan after INTERVAL
-            handler.postDelayed(this, scanIntervalMins * 60 * 1000L)
-        }
-    }
-
-    private fun startPeriodicScan() {
-        // Run immediately
-        handler.post(scanRunnable)
-    }
-
-    private fun startScan() {
-        if (isScanning) return
-        if (!::centralManager.isInitialized) {
-            Log.e("CgmService", "CentralManager not initialized, cannot scan")
-            return
-        }
-        
-        val sharedPref = getSharedPreferences("CgmAppSettings", Context.MODE_PRIVATE)
-        val selectedMac = sharedPref.getString("selected_device_mac", null)
-        
-        if (selectedMac.isNullOrEmpty()) {
-            Log.d("CgmService", "No device selected, skipping scan.")
-            return
-        }
-
-        Log.d("CgmService", "Starting scan cycle...")
-        try {
-            val scanDuration = sharedPref.getInt("scan_duration", 5) * 1000L
-            // Acquire wake lock to ensure CPU doesn't sleep during scan
-            wakeLock?.acquire(scanDuration + 1000)
-
-            // Scan for specifically the selected peripheral
-            centralManager.scanForPeripheralsWithAddresses(listOf(selectedMac))
-            isScanning = true
-
-            // Stop scanning after SCAN_DURATION
-            handler.postDelayed({
-                stopScan()
-            }, scanDuration)
-        } catch (e: Exception) {
-            Log.e("CgmService", "Error starting scan", e)
-            if (wakeLock?.isHeld == true) wakeLock?.release()
-        }
-    }
-
-    private fun stopScan() {
-        if (!isScanning) return
-        if (!::centralManager.isInitialized) return
-        
-        Log.d("CgmService", "Stopping scan.")
-        centralManager.stopScan()
-        isScanning = false
-
-        if (wakeLock?.isHeld == true) {
-            wakeLock?.release()
-        }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        stopScan()
-        handler.removeCallbacks(scanRunnable)
-        handler.removeCallbacks(nightscoutRunnable)
     }
 
     override fun onBind(intent: Intent?): IBinder? {
