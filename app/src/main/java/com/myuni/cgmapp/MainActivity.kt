@@ -509,11 +509,7 @@ class MainActivity : AppCompatActivity() {
             addAction(CgmService.ACTION_ARROW_UPDATE)
             addAction(CgmService.ACTION_UPLOAD_STATUS)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(cgmReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(cgmReceiver, filter)
-        }
+        ContextCompat.registerReceiver(this, cgmReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
         handler.post(updateTimeRunnable)
         loadLastValueFromDb() // Ensure UI is populated from DB on resume
         loadChartData()
